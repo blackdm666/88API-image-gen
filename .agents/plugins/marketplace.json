@@ -1,14 +1,14 @@
 {
-  "name": "fhl-plugins",
+  "name": "88api-plugins",
   "interface": {
-    "displayName": "FHL Plugins"
+    "displayName": "88API Plugins"
   },
   "plugins": [
     {
-      "name": "fhl-image-gen",
+      "name": "88api-image-gen",
       "source": {
         "source": "local",
-        "path": "./plugins/fhl-image-gen"
+        "path": "./plugins/88api-image-gen"
       },
       "policy": {
         "installation": "AVAILABLE",
