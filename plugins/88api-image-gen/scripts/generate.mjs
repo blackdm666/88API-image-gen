@@ -6,12 +6,13 @@ import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const API_ROOT = "https://88api.ai";
-const RESPONSES_URL = `${API_ROOT}/v1/responses`;
-const TEXT_MODEL = "gpt-5.5";
+const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
+const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const IMAGE_MODEL = "gpt-image-2";
+const DEFAULT_TRANSPORT = "images";
+const TRANSPORTS = new Set(["auto", "images"]);
 const CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
 const LEGACY_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
-const NO_PROMPT_REVISION_INSTRUCTIONS = "You are a tool runner. Pass the user prompt to image_generation VERBATIM. DO NOT rewrite, expand, polish, or revise it in any way. Use the exact text the user gave.";
 
 const MAX_GENERATION_COUNT = 9;
 const MAX_REPEAT = 50;
@@ -312,12 +313,12 @@ function workerLabel(worker) {
 
 function summarizeWorker(worker, index) {
   return {
-    index: index + 1,
-    id: worker.id,
-    name: worker.name,
-    enabled: worker.enabled !== false,
-    keyPreview: previewKey(worker.apiKey),
-    createdAt: worker.createdAt || null,
+    序号: index + 1,
+    编号: worker.id,
+    名称: worker.name,
+    状态: worker.enabled !== false ? "已启用" : "已停用",
+    密钥预览: previewKey(worker.apiKey),
+    创建时间: worker.createdAt || null,
   };
 }
 
@@ -333,30 +334,49 @@ function buildConfigSummary(config) {
   const workers = getConfiguredWorkers(config);
   const enabledWorkers = workers.filter((worker) => worker.enabled !== false);
   return {
-    hasKey: workers.length > 0,
-    keyPreview: workers.length === 1 ? previewKey(workers[0].apiKey) : null,
-    workerCount: workers.length,
-    workerLimit: MAX_WORKERS,
-    workerLimitExceeded: workers.length > MAX_WORKERS,
-    enabledWorkerCount: enabledWorkers.length,
-    workers: workers.map(summarizeWorker),
-    quickMode: config?.quickMode || null,
-    batchMode: config?.batchMode || null,
+    密钥状态: workers.length > 0 ? "已配置" : "未配置",
+    密钥预览: workers.length === 1 ? previewKey(workers[0].apiKey) : null,
+    已配置密钥数: workers.length,
+    已启用密钥数: enabledWorkers.length,
+    密钥上限: MAX_WORKERS,
+    是否超出上限: workers.length > MAX_WORKERS ? "是" : "否",
+    默认传输: "Images API（仅使用 gpt-image-2）",
+    密钥列表: workers.map(summarizeWorker),
+    快速模式: config?.quickMode || null,
+    批量模式: config?.batchMode || null,
   };
 }
 
 function printWorkerList(config) {
   const workers = getConfiguredWorkers(config);
   if (workers.length === 0) {
-    console.log(`Workers: none configured (limit ${MAX_WORKERS})`);
+    console.log(`密钥列表：尚未配置（最多 ${MAX_WORKERS} 个）`);
     return;
   }
   const enabled = workers.filter((worker) => worker.enabled !== false).length;
-  console.log(`Workers: ${workers.length} total, ${enabled} enabled, limit ${MAX_WORKERS}`);
+  console.log(`密钥列表：共 ${workers.length} 个，已启用 ${enabled} 个，最多 ${MAX_WORKERS} 个`);
   workers.forEach((worker, index) => {
-    console.log(`${index + 1}. ${worker.name} [${worker.id}] ${worker.enabled !== false ? "enabled" : "disabled"} key=${previewKey(worker.apiKey)}`);
+    console.log(`${index + 1}. ${worker.name} [${worker.id}] ${worker.enabled !== false ? "已启用" : "已停用"} 密钥=${previewKey(worker.apiKey)}`);
   });
   if (workers.length > MAX_WORKERS) console.log(workerLimitErrorMessage(workers.length));
+}
+
+function normalizeTransport(value) {
+  const normalized = String(value || DEFAULT_TRANSPORT).trim().toLowerCase();
+  if (normalized === "response") return "responses";
+  if (normalized === "image" || normalized === "images-api") return "images";
+  return normalized;
+}
+
+function resolveRunTransport(value) {
+  const requested = normalizeTransport(value);
+  if (!TRANSPORTS.has(requested)) {
+    if (requested === "responses") {
+      throw new Error("Responses transport is disabled: image-generation group keys use the gpt-image-2 Images API only.");
+    }
+    throw new Error(`Invalid transport="${value}". Use auto or images.`);
+  }
+  return "images";
 }
 
 function normalizeQuality(quality) {
@@ -540,10 +560,6 @@ function imageExtensionForMimeType(mimeType) {
   return "png";
 }
 
-function imageDataURLFromBuffer(buffer, mimeType) {
-  return `data:${mimeType || "image/png"};base64,${buffer.toString("base64")}`;
-}
-
 function normalizeBase64Image(value) {
   if (!value || typeof value !== "string") return "";
   const comma = value.indexOf(",");
@@ -595,6 +611,7 @@ function sleep(ms) {
 
 function isRetryableError(error) {
   const text = String(error || "").toLowerCase();
+  if (text.includes("[no-retry]")) return false;
   return [
     "http 429",
     "http 502",
@@ -613,7 +630,7 @@ function isRetryableError(error) {
     "socket hang up",
     "econnreset",
     "terminated",
-    "no image_generation_call result",
+    "images api response did not contain",
   ].some((pattern) => text.includes(pattern));
 }
 
@@ -752,105 +769,6 @@ function inspectExistingImage(path) {
     retries: 0,
     reusedExisting: true,
   };
-}
-
-function extractImagesFromResponse(data) {
-  const items = Array.isArray(data?.data) ? data.data : [];
-  return items
-    .map((item) => item?.b64_json || item?.image?.b64_json || item?.base64)
-    .filter((item) => typeof item === "string" && item.trim());
-}
-
-function parseSSEEventLine(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("data: ")) return null;
-  const payload = trimmed.slice(6).trim();
-  if (!payload || payload === "[DONE]") return null;
-  try {
-    return JSON.parse(payload);
-  } catch {
-    return null;
-  }
-}
-
-function walkForImageGenerationCall(value) {
-  if (!value) return null;
-  if (Array.isArray(value)) {
-    for (const child of value) {
-      const found = walkForImageGenerationCall(child);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value === "object") {
-    if (value.type === "image_generation_call" && value.result) return value;
-    for (const child of Object.values(value)) {
-      const found = walkForImageGenerationCall(child);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function walkForBase64Image(value) {
-  if (!value) return null;
-  if (Array.isArray(value)) {
-    for (const child of value) {
-      const found = walkForBase64Image(child);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value === "object") {
-    if (typeof value.b64_json === "string" && value.b64_json.trim()) return value.b64_json;
-    if (typeof value.partial_image_b64 === "string" && value.partial_image_b64.trim()) return value.partial_image_b64;
-    if (typeof value.base64 === "string" && value.base64.trim()) return value.base64;
-    for (const child of Object.values(value)) {
-      const found = walkForBase64Image(child);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function extractImagesFromResponses(raw) {
-  const images = [];
-  const partialImages = [];
-  for (const line of String(raw || "").split(/\r?\n/)) {
-    const event = parseSSEEventLine(line);
-    if (!event) continue;
-    if (event?.type === "response.image_generation_call.partial_image" && typeof event.partial_image_b64 === "string" && event.partial_image_b64.trim()) {
-      partialImages.push(event.partial_image_b64);
-      continue;
-    }
-    if (event?.type === "image_generation.partial_image" && typeof event.b64_json === "string" && event.b64_json.trim()) {
-      partialImages.push(event.b64_json);
-      continue;
-    }
-    if (event?.type === "image_generation.completed" && typeof event.b64_json === "string" && event.b64_json.trim()) {
-      images.push(event.b64_json);
-      continue;
-    }
-    if (event?.type === "response.output_item.done" && event?.item?.type === "image_generation_call" && event.item.result) {
-      images.push(event.item.result);
-      continue;
-    }
-    const found = walkForImageGenerationCall(event);
-    if (found?.result) images.push(found.result);
-  }
-
-  if (images.length > 0) return images;
-  try {
-    const parsed = JSON.parse(raw);
-    const found = walkForImageGenerationCall(parsed);
-    if (found?.result) return [found.result];
-    const base64 = walkForBase64Image(parsed);
-    if (base64) return [base64];
-  } catch {
-    // The normal Responses path is SSE, so raw JSON is only a fallback.
-  }
-  if (partialImages.length > 0) return [partialImages[partialImages.length - 1]];
-  return [];
 }
 
 function parseSizeForAspect(size) {
@@ -1034,20 +952,6 @@ function gcd(left, right) {
   return a;
 }
 
-function aspectInstructionForSize(size) {
-  const parsed = parseSizeForAspect(size);
-  if (!parsed) return "";
-  const divisor = gcd(parsed.width, parsed.height);
-  if (!divisor) return "";
-  const aspect = `${parsed.width / divisor}:${parsed.height / divisor}`;
-  const orientation = parsed.width === parsed.height
-    ? "square"
-    : parsed.width > parsed.height
-      ? "landscape"
-      : "portrait";
-  return `The selected output aspect ratio is ${aspect} (${orientation}). The image_generation result MUST use a ${aspect} canvas and must not return any other aspect ratio.`;
-}
-
 function aspectPromptSuffixForSize(size) {
   const parsed = parseSizeForAspect(size);
   if (!parsed) return "";
@@ -1063,74 +967,226 @@ function aspectPromptSuffixForSize(size) {
   return `请严格按照 ${aspect} 横版画幅生成最终图片，整张图片必须为 ${aspect} 横向构图，不要正方形，不要竖版。`;
 }
 
-function buildResponsesImageBody(prompt, size, action, sourceDataURLs = []) {
-  const aspectInstruction = aspectInstructionForSize(size);
+function imageApiPrompt(prompt, size) {
   const aspectPromptSuffix = aspectPromptSuffixForSize(size);
-  const promptText = aspectPromptSuffix ? `${prompt}\n\n${aspectPromptSuffix}` : prompt;
-  const content = [{ type: "input_text", text: promptText }];
-  for (const dataURL of sourceDataURLs) {
-    if (dataURL) content.push({ type: "input_image", image_url: dataURL });
+  return aspectPromptSuffix ? `${prompt}\n\n${aspectPromptSuffix}` : prompt;
+}
+
+function buildImagesGenerationBody(prompt, size, options = {}) {
+  const body = {
+    model: IMAGE_MODEL,
+    prompt: imageApiPrompt(prompt, size),
+    size,
+    n: 1,
+  };
+  if (options.preview === true) {
+    body.stream = true;
+    body.partial_images = 1;
   }
+  return body;
+}
+
+function buildImagesEditForm(prompt, size, sources) {
+  const form = new FormData();
+  form.append("model", IMAGE_MODEL);
+  form.append("prompt", imageApiPrompt(prompt, size));
+  form.append("size", size);
+  form.append("n", "1");
+  for (const source of sources) {
+    const blob = new Blob([source.sourceBuffer], { type: source.mimeType || "image/png" });
+    form.append("image[]", blob, source.sourceName || `reference.${source.ext || "png"}`);
+  }
+  return form;
+}
+
+function extractImagesFromImageApi(data) {
+  const items = Array.isArray(data?.data) ? data.data : [];
+  return items
+    .map((item) => item?.b64_json || item?.base64 || item?.image?.b64_json)
+    .filter((item) => typeof item === "string" && item.trim());
+}
+
+async function imageApiResultBase64(data) {
+  const [base64] = extractImagesFromImageApi(data);
+  if (base64) return base64;
+  const item = Array.isArray(data?.data) ? data.data.find((entry) => typeof entry?.url === "string" && entry.url) : null;
+  if (!item?.url) return "";
+  const res = await requestWithTimeout(item.url, { headers: { "User-Agent": "88api-image-gen/0.4" } }, REQUEST_TIMEOUT_MS);
+  if (!res.ok) throw new Error(`Image download failed: HTTP ${res.status}`);
+  return Buffer.from(await res.arrayBuffer()).toString("base64");
+}
+
+function imageApiLogSummary(data) {
+  const items = Array.isArray(data?.data) ? data.data : [];
   return {
-    model: TEXT_MODEL,
-    input: [{
-      role: "user",
-      content,
-    }],
-    tools: [{
-      type: "image_generation",
-      model: IMAGE_MODEL,
-      action,
-      size,
-      quality: "auto",
-      output_format: "png",
-      moderation: "low",
-      partial_images: parseSizeForAspect(size) ? 0 : 1,
-    }],
-    tool_choice: { type: "image_generation" },
-    reasoning: { effort: "xhigh" },
-    store: false,
-    stream: true,
-    instructions: [NO_PROMPT_REVISION_INSTRUCTIONS, aspectInstruction].filter(Boolean).join(" "),
+    created: data?.created ?? null,
+    model: data?.model || IMAGE_MODEL,
+    usage: data?.usage || null,
+    images: items.map((item, index) => {
+      const base64 = item?.b64_json || item?.base64 || item?.image?.b64_json || "";
+      return {
+        index: index + 1,
+        revised_prompt: item?.revised_prompt || null,
+        base64_characters: typeof base64 === "string" ? base64.length : 0,
+        has_url: typeof item?.url === "string" && item.url.length > 0,
+      };
+    }),
   };
 }
 
-function buildResponsesGenerationBody(prompt, size) {
-  return buildResponsesImageBody(prompt, size, "generate");
+function walkForImageApiBase64(value) {
+  if (!value) return "";
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = walkForImageApiBase64(child);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value !== "object") return "";
+  if (typeof value.b64_json === "string" && value.b64_json.trim()) return value.b64_json;
+  if (typeof value.base64 === "string" && value.base64.trim()) return value.base64;
+  for (const child of Object.values(value)) {
+    const found = walkForImageApiBase64(child);
+    if (found) return found;
+  }
+  return "";
 }
 
-function buildResponsesEditBody(prompt, size, sourceDataURLs) {
-  return buildResponsesImageBody(prompt, size, "edit", sourceDataURLs);
+function createPreviewPath() {
+  const previewDir = resolveOutputDir(join(tmpdir(), "88api-image-gen-previews"));
+  return join(previewDir, `preview_${timestamp()}_${Math.random().toString(36).slice(2, 6)}.png`);
 }
 
-async function generateImage(apiKey, prompt, size, outputDir, options = {}) {
+async function consumeImageApiStream(res, options = {}) {
+  const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("text/event-stream")) {
+    const data = await res.json();
+    const base64 = walkForImageApiBase64(data) || await imageApiResultBase64(data);
+    return {
+      base64,
+      partialImageEvents: 0,
+      eventCounts: { json: 1 },
+      previewPath: null,
+    };
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Images API SSE body is not readable");
+  const decoder = new TextDecoder();
+  const eventCounts = {};
+  let buffer = "";
+  let finalBase64 = "";
+  let latestPartial = "";
+  let partialImageEvents = 0;
+  const previewPath = options.preview ? createPreviewPath() : null;
+
+  const handleEvent = (event) => {
+    const type = String(event?.type || "unknown");
+    eventCounts[type] = (eventCounts[type] || 0) + 1;
+    if (type === "error" || type.endsWith(".failed")) {
+      throw new Error(event?.error?.message || event?.message || "Images API stream failed");
+    }
+    const base64 = walkForImageApiBase64(event);
+    if (type.includes("partial_image") && base64) {
+      partialImageEvents += 1;
+      latestPartial = base64;
+      if (previewPath) {
+        saveBase64ImageToPath(latestPartial, previewPath);
+        console.log(`[stream] 实时预览 ${partialImageEvents}: ${previewPath}`);
+      } else {
+        console.log(`[stream] 图片进度 ${partialImageEvents}`);
+      }
+      return;
+    }
+    if (base64) finalBase64 = base64;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        handleEvent(JSON.parse(payload));
+      } catch (error) {
+        if (error instanceof SyntaxError) continue;
+        throw error;
+      }
+    }
+  }
+
+  return {
+    base64: finalBase64 || latestPartial,
+    partialImageEvents,
+    eventCounts,
+    previewPath,
+  };
+}
+
+function imageStreamLogSummary(result, size) {
+  return {
+    transport: "images-stream",
+    model: IMAGE_MODEL,
+    size,
+    partialImageEvents: result.partialImageEvents || 0,
+    eventCounts: result.eventCounts || {},
+    finalBase64Characters: typeof result.base64 === "string" ? result.base64.length : 0,
+    previewSaved: !!result.previewPath,
+  };
+}
+
+async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
+  const preview = options.preview === true;
   const start = Date.now();
   try {
-    const res = await requestWithTimeout(RESPONSES_URL, {
+    const res = await requestWithTimeout(IMAGES_GENERATIONS_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Accept: "text/event-stream, application/json",
+        Accept: preview ? "text/event-stream, application/json" : "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(buildResponsesGenerationBody(prompt, size)),
+      body: JSON.stringify(buildImagesGenerationBody(prompt, size, { preview })),
     }, REQUEST_TIMEOUT_MS);
     if (!res.ok) return { ok: false, elapsed: Date.now() - start, error: await parseErrorResponse(res) };
 
-    const raw = await res.text();
-    const [base64] = extractImagesFromResponses(raw);
+    const streamed = preview ? await consumeImageApiStream(res, options) : null;
+    const data = preview ? null : await res.json();
+    const base64 = preview ? streamed?.base64 : await imageApiResultBase64(data);
     const saved = saveBase64Image(base64, outputDir, "img", null, resize ? size : null);
     const elapsed = Date.now() - start;
-    if (!saved) return { ok: false, elapsed, error: "No image_generation_call result in Responses stream" };
-    return { ok: true, elapsed, ...saved };
+    if (!saved) {
+      return {
+        ok: false,
+        elapsed,
+        error: preview
+          ? "[NO-RETRY] Images API stream completed without a final image; server accepted the paid request"
+          : "Images API response did not contain an image result",
+      };
+    }
+    if (options.rawLogPath && streamed) {
+      saveTextArtifact(options.rawLogPath, JSON.stringify(imageStreamLogSummary(streamed, size), null, 2));
+    }
+    return { ok: true, elapsed, transport: preview ? "images-stream" : "images", ...saved, previewPath: streamed?.previewPath || null };
   } catch (error) {
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: error?.name === "AbortError" ? `Timeout (${REQUEST_TIMEOUT_MS / 1000}s)` : error?.message || String(error),
+      error: `[NO-RETRY] Images request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
     };
   }
+}
+
+async function generateImage(apiKey, prompt, size, outputDir, options = {}) {
+  resolveRunTransport(options.transport || DEFAULT_TRANSPORT);
+  return generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, options);
 }
 
 function loadSourceImage(imagePath) {
@@ -1149,7 +1205,6 @@ function loadSourceImage(imagePath) {
     sourceBuffer,
     mimeType,
     ext,
-    dataURL: imageDataURLFromBuffer(sourceBuffer, mimeType),
   };
 }
 
@@ -1173,21 +1228,19 @@ function loadSourceImages(imagePaths) {
   };
 }
 
-async function editImageViaResponsesOnce(apiKey, sources, prompt, size, outputDir, options = {}) {
+async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
   const start = Date.now();
-  const sourceDataURLs = sources.map((item) => item.dataURL).filter(Boolean);
   const sourceName = summarizeSources(sources);
   const rawLogPath = options.rawLogPath || null;
   try {
-    const res = await requestWithTimeout(RESPONSES_URL, {
+    const res = await requestWithTimeout(IMAGES_EDITS_URL, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream, application/json",
+        Accept: "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(buildResponsesEditBody(prompt, size, sourceDataURLs)),
+      body: buildImagesEditForm(prompt, size, sources),
     }, REQUEST_TIMEOUT_MS);
     if (!res.ok) {
       const raw = await res.text().catch(() => "");
@@ -1195,23 +1248,28 @@ async function editImageViaResponsesOnce(apiKey, sources, prompt, size, outputDi
       return { ok: false, elapsed: Date.now() - start, error: parseErrorBody(res.status, raw), sourceName };
     }
 
-    const raw = await res.text();
-    if (rawLogPath) saveTextArtifact(rawLogPath, raw);
-    const [base64] = extractImagesFromResponses(raw);
+    const data = await res.json();
+    if (rawLogPath) saveTextArtifact(rawLogPath, JSON.stringify(imageApiLogSummary(data), null, 2));
+    const base64 = await imageApiResultBase64(data);
     const saved = options.savePath
       ? saveBase64ImageToPath(base64, options.savePath, resize ? size : null)
       : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, resize ? size : null);
     const elapsed = Date.now() - start;
-    if (!saved) return { ok: false, elapsed, error: "No image_generation_call result in Responses stream", sourceName };
+    if (!saved) return { ok: false, elapsed, error: "Images API response did not contain an edited image", sourceName };
     return { ok: true, elapsed, ...saved, sourceName };
   } catch (error) {
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: error?.name === "AbortError" ? `Timeout (${REQUEST_TIMEOUT_MS / 1000}s)` : error?.message || String(error),
+      error: `[NO-RETRY] Images edit request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
       sourceName,
     };
   }
+}
+
+async function editImageOnce(apiKey, sources, prompt, size, outputDir, options = {}) {
+  resolveRunTransport(options.transport || DEFAULT_TRANSPORT);
+  return editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDir, options);
 }
 
 function createWorkerSession(worker) {
@@ -1651,9 +1709,11 @@ async function editImage(workers, imagePaths, prompt, size, outputDir, count = 1
     onTaskStart: (task, context) => {
       console.log(`[${context.index + 1}/${context.total}] ${task.startText} via ${workerLabel(context.worker)}`);
     },
-    runTask: async (worker, task) => editImageViaResponsesOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
+    runTask: async (worker, task) => editImageOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
       resize,
       saveIndex: task.saveIndex,
+      transport: options.transport,
+      preview: options.preview === true && count === 1,
     }),
   });
 
@@ -1683,6 +1743,8 @@ async function runBatch(workers, prompts, size, concurrency, outputDir, options 
     maxRetries = MAX_RETRIES,
     retryDelayMs = RETRY_BACKOFF_MS,
     resize = true,
+    transport = "images",
+    preview = false,
     returnReport = false,
   } = options;
 
@@ -1705,6 +1767,8 @@ async function runBatch(workers, prompts, size, concurrency, outputDir, options 
     },
     runTask: async (worker, task) => generateImage(worker.apiKey, task.prompt, size, outputDir, {
       resize,
+      transport,
+      preview: preview && prompts.length === 1,
     }),
   });
 
@@ -1773,8 +1837,9 @@ async function runBatchEdit(workers, imagePaths, prompt, size, concurrency, outp
     onTaskStart: (task, context) => {
       console.log(`[${context.index + 1}/${context.total}] ${task.startText} via ${workerLabel(context.worker)}`);
     },
-    runTask: async (worker, task) => editImageViaResponsesOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
+    runTask: async (worker, task) => editImageOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
       resize,
+      transport: options.transport,
     }),
   });
 
@@ -2099,7 +2164,7 @@ function classifyWorkflowError(error) {
   const text = String(error || "").toLowerCase();
   if (!text) return "";
   if (text.includes("http 524") || text.includes("timeout occurred") || text.includes("cloudflare timeout")) return "timeout_524";
-  if (text.includes("no image_generation_call result")) return "no_image_result";
+  if (text.includes("images api response did not contain")) return "no_image_result";
   if (text.includes("fetch failed") || text.includes("terminated") || text.includes("socket hang up") || text.includes("econnreset")) return "network";
   if (text.includes("content policy") || text.includes("safety policy") || text.includes("moderation")) return "content_policy";
   if (text.includes("http 401") || text.includes("http 403") || text.includes("invalid api key") || text.includes("unauthorized") || text.includes("forbidden")) return "auth";
@@ -2291,6 +2356,7 @@ async function runWorkflowQueuePass(workers, queuedTasks, passOptions) {
     metadata,
     sessions,
     repair = false,
+    transport = "images",
   } = passOptions;
   if (queuedTasks.length === 0) return noOpQueueReport(workers, outputRoot);
   const startedAt = new Date().toISOString();
@@ -2320,10 +2386,11 @@ async function runWorkflowQueuePass(workers, queuedTasks, passOptions) {
           sourceName: basename(task.itemPath),
         };
       }
-      return editImageViaResponsesOnce(worker.apiKey, [...fixedSources, item], task.prompt, size, task.outputDir, {
+      return editImageOnce(worker.apiKey, [...fixedSources, item], task.prompt, size, task.outputDir, {
         resize,
         savePath: task.outputPath,
-        rawLogPath: `${task.rawLogBasePath}.${repair ? "repair" : "main"}.attempt${context.attempt}.sse.txt`,
+        rawLogPath: `${task.rawLogBasePath}.${repair ? "repair" : "main"}.attempt${context.attempt}.json`,
+        transport,
       });
     },
   });
@@ -2388,6 +2455,7 @@ async function runWorkflowBatchEdit(workers, options) {
     outputDir,
     dryRun = false,
     repairPasses = WORKFLOW_DEFAULT_REPAIR_PASSES,
+    transport = "images",
   } = options;
 
   const fixedGroup = loadSourceImages(fixedRefPaths);
@@ -2410,6 +2478,7 @@ async function runWorkflowBatchEdit(workers, options) {
     aspect,
     templateCount: workflowTemplates.length,
     repairPasses,
+    transport,
   };
 
   if (dryRun) {
@@ -2447,6 +2516,7 @@ async function runWorkflowBatchEdit(workers, options) {
     allTasks: tasks,
     metadata,
     sessions,
+    transport,
   });
   reports.push(mainReport);
 
@@ -2467,6 +2537,7 @@ async function runWorkflowBatchEdit(workers, options) {
       metadata,
       sessions,
       repair: true,
+      transport,
     });
     reports.push(repairReport);
   }
@@ -2593,6 +2664,7 @@ async function runNailStressTest(workers, options) {
     outputDir,
     dryRun = false,
     resumeExisting = true,
+    transport = "images",
   } = options;
 
   const persona = loadSourceImage(personaPath);
@@ -2611,6 +2683,7 @@ async function runNailStressTest(workers, options) {
     size,
     aspect: "9:16",
     sceneCount: NAIL_STRESS_SCENES.length,
+    transport,
   };
 
   if (dryRun) {
@@ -2701,10 +2774,11 @@ async function runNailStressTest(workers, options) {
           sourceName: basename(task.productPath),
         };
       }
-      return editImageViaResponsesOnce(worker.apiKey, [persona, product], task.prompt, size, task.outputDir, {
+      return editImageOnce(worker.apiKey, [persona, product], task.prompt, size, task.outputDir, {
         resize,
         savePath: task.outputPath,
-        rawLogPath: `${task.rawLogBasePath}.attempt${context.attempt}.sse.txt`,
+        rawLogPath: `${task.rawLogBasePath}.attempt${context.attempt}.json`,
+        transport,
       });
     },
   });
@@ -2852,62 +2926,104 @@ async function runAdaptiveSelfTest() {
   return 0;
 }
 
-async function runEditResponsesSelfTest() {
-  console.log("Edit Responses self-test: payload shape and SSE extraction.");
+async function runImagesApiSelfTest() {
+  console.log("Images API self-test: generation JSON, edit multipart, and result extraction.");
   const sources = [
     {
       sourceName: "mock-a.png",
       sourceBuffer: Buffer.from("mock-source-a"),
       mimeType: "image/png",
       ext: "png",
-      dataURL: "data:image/png;base64,bW9jay1zb3VyY2UtYQ==",
     },
     {
       sourceName: "mock-b.jpg",
       sourceBuffer: Buffer.from("mock-source-b"),
       mimeType: "image/jpeg",
       ext: "jpg",
-      dataURL: "data:image/jpeg;base64,bW9jay1zb3VyY2UtYg==",
     },
   ];
-  const payload = buildResponsesEditBody("mock edit prompt", "1152x2048", sources.map((item) => item.dataURL));
-  const content = payload.input?.[0]?.content || [];
-  const tool = payload.tools?.[0] || {};
-  const payloadOk = payload.model === TEXT_MODEL
-    && payload.stream === true
-    && payload.store === false
-    && content[0]?.type === "input_text"
-    && content[1]?.type === "input_image"
-    && content[1]?.image_url === sources[0].dataURL
-    && content[2]?.type === "input_image"
-    && content[2]?.image_url === sources[1].dataURL
-    && tool.type === "image_generation"
-    && tool.model === IMAGE_MODEL
-    && tool.action === "edit"
-    && tool.size === "1152x2048"
-    && tool.output_format === "png"
-    && tool.partial_images === 0
-    && payload.tool_choice?.type === "image_generation";
+  const generation = buildImagesGenerationBody("mock generation prompt", "1152x2048");
+  const form = buildImagesEditForm("mock edit prompt", "1152x2048", sources);
+  const entries = [...form.entries()];
+  const imageEntries = entries.filter(([key]) => key === "image[]");
+  const payloadOk = generation.model === IMAGE_MODEL
+    && generation.n === 1
+    && generation.size === "1152x2048"
+    && generation.prompt.includes("mock generation prompt")
+    && form.get("model") === IMAGE_MODEL
+    && form.get("size") === "1152x2048"
+    && form.get("n") === "1"
+    && String(form.get("prompt")).includes("mock edit prompt")
+    && imageEntries.length === 2
+    && imageEntries.every(([, value]) => value instanceof Blob);
 
   const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-  const raw = `data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"${pngB64}"}}\n`;
-  const [base64] = extractImagesFromResponses(raw);
+  const [base64] = extractImagesFromImageApi({ data: [{ b64_json: pngB64 }] });
+  const logSummary = imageApiLogSummary({ data: [{ b64_json: pngB64, url: "https://signed.example/image.png" }] });
+  const logText = JSON.stringify(logSummary);
   const outputDir = resolveOutputDir(join(tmpdir(), "88api-image-gen-self-test"));
   const saved = saveBase64Image(base64, outputDir, "self_test_edit");
   const savedOk = !!saved?.path && existsSync(saved.path) && saved.width === 1 && saved.height === 1;
+  const logOk = logSummary.images?.[0]?.base64_characters === pngB64.length
+    && logSummary.images?.[0]?.has_url === true
+    && !logText.includes(pngB64)
+    && !logText.includes("signed.example");
 
-  if (!payloadOk || !savedOk) {
-    console.error("Edit Responses self-test FAILED.");
+  if (!payloadOk || !savedOk || !logOk) {
+    console.error("Images API self-test FAILED.");
     console.error(JSON.stringify({
       payloadOk,
       savedOk,
+      logOk,
       saved,
     }, null, 2));
     return 1;
   }
 
-  console.log("Edit Responses self-test OK.");
+  console.log("Images API self-test OK.");
   console.log(`Saved: ${saved.path}`);
+  return 0;
+}
+
+async function runImageStreamSelfTest() {
+  console.log("Images API stream self-test: payload shape, partial-image SSE, and final extraction.");
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const body = buildImagesGenerationBody("mock generation", "1152x2048", { preview: true });
+  const sse = [
+    `data: ${JSON.stringify({ type: "image_generation.partial_image", partial_image_index: 0, b64_json: pngB64 })}`,
+    `data: ${JSON.stringify({ type: "image_generation.completed", b64_json: pngB64 })}`,
+    "data: [DONE]",
+    "",
+  ].join("\n");
+  const parsed = await consumeImageApiStream(new Response(sse, {
+    headers: { "Content-Type": "text/event-stream" },
+  }), { preview: false });
+  const payloadOk = body.model === IMAGE_MODEL
+    && body.stream === true
+    && body.partial_images === 1
+    && body.n === 1
+    && body.prompt.includes("mock generation");
+  const streamOk = parsed.base64 === pngB64
+    && parsed.partialImageEvents === 1
+    && parsed.eventCounts?.["image_generation.completed"] === 1;
+  let responsesRejected = false;
+  try {
+    resolveRunTransport("responses");
+  } catch {
+    responsesRejected = true;
+  }
+  const safetyOk = resolveRunTransport("auto") === "images"
+    && resolveRunTransport("images") === "images"
+    && responsesRejected
+    && isRetryableError("[NO-RETRY] Images API stream timed out") === false
+    && parseArgs(["--prompt", "mock", "--transport", "images", "--preview"]).flags.transport === "images"
+    && parseArgs(["--prompt", "mock", "--transport", "images", "--preview"]).flags.preview === true;
+  if (!payloadOk || !streamOk || !safetyOk) {
+    console.error("Images API stream self-test FAILED.");
+    console.error(JSON.stringify({ payloadOk, streamOk, safetyOk, parsed: imageStreamLogSummary(parsed, "1152x2048") }, null, 2));
+    return 1;
+  }
+  console.log("Images API stream self-test OK.");
   return 0;
 }
 
@@ -2938,6 +3054,11 @@ function parseArgs(argv) {
     else if (value === "--limit" && argv[i + 1]) args.flags.limit = Number.parseInt(argv[++i], 10);
     else if (value === "--output-dir" && argv[i + 1]) args.flags.outputDir = argv[++i];
     else if (value === "--concurrency" && argv[i + 1]) args.flags.concurrency = Number.parseInt(argv[++i], 10);
+    else if (value === "--transport" && argv[i + 1]) args.flags.transport = argv[++i];
+    else if (value === "--responses") args.flags.transport = "responses";
+    else if (value === "--images-api") args.flags.transport = "images";
+    else if (value === "--preview") args.flags.preview = true;
+    else if (value === "--no-preview") args.flags.preview = false;
     else if (value === "--adaptive") args.flags.adaptive = true;
     else if (value === "--no-adaptive") args.flags.adaptive = false;
     else if (value === "--dry-run") args.flags.dryRun = true;
@@ -2958,7 +3079,9 @@ function parseArgs(argv) {
       args.flags.unsupportedEditRoute = "legacy-edit";
     } else if (value === "--edit-api" && argv[i + 1]) {
       const route = String(argv[++i]).trim().toLowerCase();
-      if (route && route !== "responses") args.flags.unsupportedEditRoute = `edit-api:${route}`;
+      if (route === "responses" || route === "response") args.flags.transport = "responses";
+      else if (route === "images" || route === "image") args.flags.transport = "images";
+      else args.flags.unsupportedEditRoute = `edit-api:${route}`;
     }
     else if (value === "--image" && argv[i + 1]) {
       if (!args.flags.images) args.flags.images = [];
@@ -2981,7 +3104,8 @@ function parseArgs(argv) {
     else if (value === "--resolve-size") args.flags.resolveSize = true;
     else if (value === "--self-test-adaptive") args.flags.selfTestAdaptive = true;
     else if (value === "--self-test-workers") args.flags.selfTestAdaptive = true;
-    else if (value === "--self-test-edit-responses") args.flags.selfTestEditResponses = true;
+    else if (value === "--self-test-images-api") args.flags.selfTestImagesApi = true;
+    else if (value === "--self-test-image-stream" || value === "--self-test-responses" || value === "--self-test-edit-responses") args.flags.selfTestImageStream = true;
     else if (value === "--self-test-workflow") args.flags.selfTestWorkflow = true;
     else if (value === "--help" || value === "-h") args.flags.help = true;
     i++;
@@ -3011,16 +3135,22 @@ FIRST USE
   maximum: ${MAX_WORKERS} workers; multiple workers can use substantial memory and are not recommended on low-spec computers
 
 GENERATE
-  --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_GENERATION_COUNT}] [--no-resize]
+  --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_GENERATION_COUNT}] [--transport auto|images] [--preview|--no-preview] [--no-resize]
   --prompt "..." --repeat 1..${MAX_REPEAT} [--concurrency 1..${MAX_CONCURRENCY}] [--adaptive|--no-adaptive]
   --batch prompts.json [--ratio R|--aspect R] [--concurrency N] [--no-resize]
   --batch-inline "prompt 1" "prompt 2" ... [--ratio R|--aspect R] [--concurrency N] [--no-resize]
 
 EDIT
-  --edit --image path.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N]
-  --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N]    combine all sources in one Responses edit request
+  --edit --image path.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N] [--transport auto|images]
+  --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N]    combine all sources in one edit request
   --batch-edit --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--concurrency N]
-  image-to-image route is fixed to Responses API; --legacy-edit and --edit-api images are disabled
+  all edits use Images API multipart image[] uploads
+
+TRANSPORT
+  --transport auto       use the gpt-image-2 Images API
+  --transport images     force /v1/images/generations or /v1/images/edits
+  --preview               stream and save a real partial-image preview for one Images generation task
+  --no-preview            wait for the final image without saving a preview
 
 WORKFLOW BATCH EDIT
   --workflow-batch-edit --fixed-ref ref.png --item-dir dir --templates templates.json [--limit ${WORKFLOW_DEFAULT_LIMIT}] [--aspect R] [--concurrency 1..${MAX_CONCURRENCY}] [--repair-passes 0..5|--no-repair] [--dry-run]
@@ -3035,14 +3165,16 @@ TOOLS
   --resolve-size --quality 2K --aspect 16:9
   --self-test-adaptive
   --self-test-workers
-  --self-test-edit-responses
+  --self-test-images-api
+  --self-test-image-stream
   --self-test-workflow
 
 DEFAULTS
   API root: ${API_ROOT}
-  responses text model: ${TEXT_MODEL}
+  generation endpoint: ${IMAGES_GENERATIONS_URL}
+  edit endpoint: ${IMAGES_EDITS_URL}
   image model: ${IMAGE_MODEL}
-  edit API: responses only
+  API mode: gpt-image-2 Images API only; no GPT text model required
   request quality: fixed ${FIXED_REQUEST_QUALITY}
   output: ~/Pictures/88api-image-gen
   worker pool: enabled, one worker per task, auto parallel for independent tasks, max workers ${MAX_WORKERS}
@@ -3090,6 +3222,14 @@ function resolveGenerationParams(flags, modeConfig) {
 async function main() {
   const { prompts, flags } = parseArgs(process.argv.slice(2));
   const config = loadConfig();
+  let requestedTransport;
+  try {
+    requestedTransport = normalizeTransport(flags.transport || DEFAULT_TRANSPORT);
+    resolveRunTransport(requestedTransport);
+  } catch (error) {
+    console.error(`ERROR: ${error?.message || String(error)}`);
+    process.exit(1);
+  }
 
   if (flags.getConfig) {
     console.log(JSON.stringify(buildConfigSummary(config), null, 2));
@@ -3245,8 +3385,13 @@ async function main() {
     return;
   }
 
-  if (flags.selfTestEditResponses) {
-    process.exitCode = await runEditResponsesSelfTest();
+  if (flags.selfTestImagesApi) {
+    process.exitCode = await runImagesApiSelfTest();
+    return;
+  }
+
+  if (flags.selfTestImageStream) {
+    process.exitCode = await runImageStreamSelfTest();
     return;
   }
 
@@ -3289,6 +3434,8 @@ async function main() {
     const limit = clampInteger(flags.limit, 1, 1000, WORKFLOW_DEFAULT_LIMIT);
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const repairPasses = clampInteger(flags.repairPasses, 0, 5, WORKFLOW_DEFAULT_REPAIR_PASSES);
+    const transport = resolveRunTransport(requestedTransport, true);
+    console.log(`Transport: ${transport} (workflow batch)`);
     const result = await runWorkflowBatchEdit(configuredWorkers, {
       fixedRefPaths: flags.fixedRefs || [],
       itemDir: flags.itemDir,
@@ -3304,6 +3451,7 @@ async function main() {
       outputDir: flags.outputDir,
       dryRun: !!flags.dryRun,
       repairPasses,
+      transport,
     });
     process.exitCode = result.report?.exitCode || 0;
     return;
@@ -3327,6 +3475,8 @@ async function main() {
     const limit = clampInteger(flags.limit, 1, 1000, NAIL_STRESS_DEFAULT_LIMIT);
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const { size } = resolveGenerationParams({ ...flags, aspect: "9:16" }, { quality: FIXED_REQUEST_QUALITY, ratio: "9:16" });
+    const transport = resolveRunTransport(requestedTransport, true);
+    console.log(`Transport: ${transport} (batch preset)`);
     const result = await runNailStressTest(configuredWorkers, {
       personaPath: flags.personaPath,
       productDir: flags.productDir,
@@ -3337,6 +3487,7 @@ async function main() {
       resize: flags.resize !== false,
       outputDir: flags.outputDir,
       dryRun: !!flags.dryRun,
+      transport,
     });
     process.exitCode = result.report?.exitCode || 0;
     return;
@@ -3359,24 +3510,33 @@ async function main() {
       process.exit(1);
     }
     if (flags.unsupportedEditRoute) {
-      console.error("ERROR: Image-to-image is fixed to Responses API with input_image blocks. --legacy-edit and --edit-api images are disabled in this plugin.");
+      console.error("ERROR: Image-to-image uses /v1/images/edits only; legacy Responses edit routes are disabled.");
       process.exit(1);
     }
     const { size } = resolveGenerationParams(flags, config.quickMode);
     if (images.length > 1 && flags.batchEdit) {
       const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
+      const transport = resolveRunTransport(requestedTransport, true);
+      console.log(`Transport: ${transport} (batch edit)`);
       process.exitCode = await runBatchEdit(configuredWorkers, images, prompts[0], size, concurrency, outputDir, {
         adaptive: flags.adaptive !== false,
         resize: flags.resize !== false,
+        transport,
       });
       return;
     }
     const count = clampInteger(flags.count, 1, MAX_EDIT_COUNT, 1);
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency ?? count, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
+    const transport = resolveRunTransport(requestedTransport);
+    const preview = false;
+    if (flags.preview === true) console.warn("NOTICE: --preview is supported for text-to-image generation only; edits use /v1/images/edits.");
+    console.log(`Transport: ${transport}`);
     const result = await editImage(configuredWorkers, images, prompts[0], size, outputDir, count, false, {
       adaptive: flags.adaptive !== false,
       concurrency,
       resize: flags.resize !== false,
+      transport,
+      preview,
     });
     if (!result.ok) {
       if (result.results?.length > 0) {
@@ -3423,9 +3583,12 @@ async function main() {
       process.exit(1);
     }
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
+    const transport = resolveRunTransport(requestedTransport, true);
+    console.log(`Transport: ${transport} (batch prompts)`);
     process.exit(await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
+      transport,
     }));
   }
 
@@ -3435,9 +3598,12 @@ async function main() {
       process.exit(1);
     }
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
+    const transport = resolveRunTransport(requestedTransport, true);
+    console.log(`Transport: ${transport} (batch prompts)`);
     process.exit(await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
+      transport,
     }));
   }
 
@@ -3447,16 +3613,24 @@ async function main() {
     : clampInteger(flags.count ?? config.quickMode?.count, 1, MAX_GENERATION_COUNT, DEFAULTS.count);
   if (total > 1) {
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
+    const transport = resolveRunTransport(requestedTransport, true);
+    console.log(`Transport: ${transport} (${total} independent images)`);
     process.exit(await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
       adaptive: flags.adaptive !== false,
       isVariation: true,
       resize: flags.resize !== false,
+      transport,
     }));
   }
 
+  const transport = resolveRunTransport(requestedTransport, false);
+  const preview = flags.preview === true;
+  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}`);
   process.exit(await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
     adaptive: flags.adaptive !== false,
     resize: flags.resize !== false,
+    transport,
+    preview,
   }));
 }
 
