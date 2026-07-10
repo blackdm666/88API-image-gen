@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
-const API_ROOT = "https://www.fhl.mom";
+const API_ROOT = "https://88api.ai";
 const RESPONSES_URL = `${API_ROOT}/v1/responses`;
 const TEXT_MODEL = "gpt-5.5";
 const IMAGE_MODEL = "gpt-image-2";
-const CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
+const CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
+const LEGACY_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
 const NO_PROMPT_REVISION_INSTRUCTIONS = "You are a tool runner. Pass the user prompt to image_generation VERBATIM. DO NOT rewrite, expand, polish, or revise it in any way. Use the exact text the user gave.";
 
 const MAX_GENERATION_COUNT = 9;
@@ -98,7 +99,7 @@ const DEFAULTS = {
   concurrency: 3,
 };
 const FIXED_REQUEST_QUALITY = "2K";
-const FHL_SIZE_LIMIT_NOTICE = "由于官方请求限制FHL只能接收1K图像，详细计费以后台为准。";
+const API_SIZE_LIMIT_NOTICE = "图像请求规格与实际计费以 88api.ai 控制台为准。";
 const WORKER_ID_PREFIX = "worker-";
 const DEFAULT_WORKER_NAME = "default";
 const DEFAULT_WORKER_COOLDOWN_MS = 60_000;
@@ -245,17 +246,26 @@ function normalizeConfigShape(config) {
 function saveConfig(config) {
   const { config: normalized } = normalizeConfigShape(config);
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(normalized, null, 2));
+  writeFileSync(CONFIG_PATH, JSON.stringify(normalized, null, 2), { encoding: "utf8", mode: 0o600 });
+  try {
+    chmodSync(CONFIG_PATH, 0o600);
+  } catch {
+    // Windows may not implement POSIX permission bits; the user profile ACL remains authoritative.
+  }
 }
 
 function loadConfig() {
-  if (!existsSync(CONFIG_PATH)) return normalizeConfigShape({}).config;
+  const sourcePath = existsSync(CONFIG_PATH)
+    ? CONFIG_PATH
+    : (existsSync(LEGACY_CONFIG_PATH) ? LEGACY_CONFIG_PATH : null);
+  if (!sourcePath) return normalizeConfigShape({}).config;
   try {
-    const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(sourcePath, "utf8"));
     const normalized = normalizeConfigShape(parsed);
-    if (normalized.changed) saveConfig(normalized.config);
+    if (normalized.changed || sourcePath === LEGACY_CONFIG_PATH) saveConfig(normalized.config);
     return normalized.config;
-  } catch {
+  } catch (error) {
+    console.warn(`WARNING: Unable to read 88API configuration at ${sourcePath}: ${error?.message || String(error)}`);
     return normalizeConfigShape({}).config;
   }
 }
@@ -269,7 +279,7 @@ function getConfiguredWorkers(config, options = {}) {
 function getEnabledWorkersOrExit(config) {
   const workers = getConfiguredWorkers(config, { requireEnabled: true });
   if (workers.length === 0) {
-    console.error("ERROR: No enabled FHL API worker is configured. Run --set-key <key> for single-worker setup or --add-worker-key <key> to build a worker pool.");
+    console.error("ERROR: No enabled 88API worker is configured. Create an image-generation group key at https://88api.ai/ and run --set-key <YOUR_88API_IMAGE_GROUP_KEY>. Start with one worker; multiple workers use more memory.");
     process.exit(1);
   }
   return workers;
@@ -424,7 +434,7 @@ function timestamp() {
 }
 
 function resolveOutputDir(userDir) {
-  const dir = userDir || join(homedir(), "Pictures", "fhl-image-gen");
+  const dir = userDir || join(homedir(), "Pictures", "88api-image-gen");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -508,11 +518,11 @@ function writeCsvFile(path, rows) {
 }
 
 function buildNailStressOutputRoot(userDir) {
-  return resolveOutputDir(userDir || join(homedir(), "Pictures", "fhl-image-gen", `nail-stress-test_${timestamp()}`));
+  return resolveOutputDir(userDir || join(homedir(), "Pictures", "88api-image-gen", `nail-stress-test_${timestamp()}`));
 }
 
 function buildWorkflowOutputRoot(userDir) {
-  return resolveOutputDir(userDir || join(homedir(), "Pictures", "fhl-image-gen", `workflow_${timestamp()}`));
+  return resolveOutputDir(userDir || join(homedir(), "Pictures", "88api-image-gen", `workflow_${timestamp()}`));
 }
 
 function imageMimeTypeFromPath(path) {
@@ -936,6 +946,54 @@ try {
   return { ok: true };
 }
 
+function replaceFileFromTemp(tmpPath, path) {
+  if (existsSync(path)) unlinkSync(path);
+  renameSync(tmpPath, path);
+}
+
+function resizePngWithImageMagick(path, width, height) {
+  const tmp = `${path}.imagemagick-${process.pid}-${Date.now()}.png`;
+  const args = [path, "-auto-orient", "-resize", `${width}x${height}^`, "-gravity", "center", "-extent", `${width}x${height}`, tmp];
+  let result = spawnSync("magick", args, { encoding: "utf8" });
+  if (result.error?.code === "ENOENT") {
+    result = spawnSync("convert", args, { encoding: "utf8" });
+  }
+  if (result.error || result.status !== 0 || !existsSync(tmp)) {
+    if (existsSync(tmp)) unlinkSync(tmp);
+    const details = [result.error?.message, result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    return { ok: false, error: details || "ImageMagick is not installed or failed to resize the image" };
+  }
+  replaceFileFromTemp(tmp, path);
+  return { ok: true };
+}
+
+function resizePngWithSips(path, width, height, sourceWidth, sourceHeight) {
+  const tmp = `${path}.sips-${process.pid}-${Date.now()}.png`;
+  const targetRatio = width / height;
+  const sourceRatio = sourceWidth / sourceHeight;
+  const cropWidth = sourceRatio > targetRatio ? Math.round(sourceHeight * targetRatio) : sourceWidth;
+  const cropHeight = sourceRatio > targetRatio ? sourceHeight : Math.round(sourceWidth / targetRatio);
+  copyFileSync(path, tmp);
+  const crop = spawnSync("sips", ["--cropToHeightWidth", String(cropHeight), String(cropWidth), tmp], { encoding: "utf8" });
+  if (crop.error || crop.status !== 0) {
+    if (existsSync(tmp)) unlinkSync(tmp);
+    return { ok: false, error: [crop.error?.message, crop.stderr, crop.stdout].filter(Boolean).join("\n").trim() || "sips crop failed" };
+  }
+  const resize = spawnSync("sips", ["--resampleHeightWidth", String(height), String(width), tmp], { encoding: "utf8" });
+  if (resize.error || resize.status !== 0) {
+    if (existsSync(tmp)) unlinkSync(tmp);
+    return { ok: false, error: [resize.error?.message, resize.stderr, resize.stdout].filter(Boolean).join("\n").trim() || "sips resize failed" };
+  }
+  replaceFileFromTemp(tmp, path);
+  return { ok: true };
+}
+
+function resizePngForPlatform(path, width, height, sourceWidth, sourceHeight) {
+  if (process.platform === "win32") return resizePngWithPowerShell(path, width, height);
+  if (process.platform === "darwin") return resizePngWithSips(path, width, height, sourceWidth, sourceHeight);
+  return resizePngWithImageMagick(path, width, height);
+}
+
 function ensurePngTargetSize(path, targetSize) {
   const target = parseSizeForAspect(targetSize);
   if (!target) return null;
@@ -946,22 +1004,13 @@ function ensurePngTargetSize(path, targetSize) {
   if (before.width === target.width && before.height === target.height) {
     return { resized: false, width: before.width, height: before.height };
   }
-  if (process.platform !== "win32") {
-    return {
-      resized: false,
-      width: before.width,
-      height: before.height,
-      error: `Resize to ${targetSize} is only implemented on Windows`,
-    };
-  }
-
-  const resized = resizePngWithPowerShell(path, target.width, target.height);
+  const resized = resizePngForPlatform(path, target.width, target.height, before.width, before.height);
   if (!resized.ok) {
     return {
       resized: false,
       width: before.width,
       height: before.height,
-      error: `Resize to ${targetSize} failed: ${resized.error}`,
+      error: `Resize to ${targetSize} failed on ${process.platform}: ${resized.error}`,
     };
   }
   const after = readPngDimensions(readFileSync(path));
@@ -2480,7 +2529,7 @@ async function runWorkflowBatchEdit(workers, options) {
 
 async function runWorkflowSelfTest() {
   const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
-  const outputRoot = join(tmpdir(), `fhl-workflow-self-test_${timestamp()}`);
+  const outputRoot = join(tmpdir(), `88api-workflow-self-test_${timestamp()}`);
   const item = {
     itemIndex: 1,
     name: "item.png",
@@ -2843,7 +2892,7 @@ async function runEditResponsesSelfTest() {
   const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const raw = `data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"${pngB64}"}}\n`;
   const [base64] = extractImagesFromResponses(raw);
-  const outputDir = resolveOutputDir(join(tmpdir(), "fhl-image-gen-self-test"));
+  const outputDir = resolveOutputDir(join(tmpdir(), "88api-image-gen-self-test"));
   const saved = saveBase64Image(base64, outputDir, "self_test_edit");
   const savedOk = !!saved?.path && existsSync(saved.path) && saved.width === 1 && saved.height === 1;
 
@@ -2941,19 +2990,25 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.log(`FHL Image Gen
+  console.log(`88API-image-gen
 
 CONFIG
   --get-config
   --list-workers
-  --set-key <key>
-  --add-worker-key <key> [--worker-name <name>]
+  --set-key <YOUR_88API_IMAGE_GROUP_KEY>
+  --add-worker-key <ANOTHER_88API_IMAGE_GROUP_KEY> [--worker-name <name>]
   --set-worker-key <worker> <key>
   --remove-worker <worker>
   --enable-worker <worker>
   --disable-worker <worker>
   --set-quick-mode --ratio R --count 1..${MAX_GENERATION_COUNT}
   --set-batch-mode --ratio R --concurrency 1..${MAX_CONCURRENCY}
+
+FIRST USE
+  runtime: Node.js 18+ (Python is not required)
+  create one or more image-generation group keys at https://88api.ai/
+  recommended: one key/worker; add distinct keys only for concurrent independent images
+  maximum: ${MAX_WORKERS} workers; multiple workers can use substantial memory and are not recommended on low-spec computers
 
 GENERATE
   --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_GENERATION_COUNT}] [--no-resize]
@@ -2989,17 +3044,17 @@ DEFAULTS
   image model: ${IMAGE_MODEL}
   edit API: responses only
   request quality: fixed ${FIXED_REQUEST_QUALITY}
-  output: ~/Pictures/fhl-image-gen
+  output: ~/Pictures/88api-image-gen
   worker pool: enabled, one worker per task, auto parallel for independent tasks, max workers ${MAX_WORKERS}
   adaptive: on, concurrency ${DEFAULTS.concurrency}, retries ${MAX_RETRIES}, worker cooldown ${DEFAULT_WORKER_COOLDOWN_MS / 1000}s
-  notice: ${FHL_SIZE_LIMIT_NOTICE}
+  notice: ${API_SIZE_LIMIT_NOTICE}
   workflow batch edit: generic fixed refs + variable item refs + user templates, auto resume and repair passes
   nail stress test: compatibility preset for ${WORKFLOW_NAIL_PRESET}; do not assume product type in generic workflow
 
 RATIOS
   ${supportedRatioText()}
   aliases: square=1:1, landscape=4:3, portrait=3:4
-  disabled after repeated real FHL 502 tests: 5:4, 4:5, 3:1, 1:3
+  disabled after repeated upstream 502 tests: 5:4, 4:5, 3:1, 1:3
 
 SIZE MATRIX
   2K: 1:1 2048x2048, 3:2 2048x1360, 2:3 1360x2048, 4:3 2048x1536, 3:4 1536x2048, 16:9 2048x1152, 9:16 1152x2048, 2:1 2048x1024, 1:2 1024x2048, 7:4 2208x1264, 4:7 1264x2208
@@ -3010,7 +3065,7 @@ function resolveGenerationParams(flags, modeConfig) {
   const requestedQuality = flags.quality || modeConfig?.quality || DEFAULTS.quality;
   const quality = normalizeQuality(requestedQuality);
   if (shouldWarnFixedQuality(requestedQuality)) {
-    console.warn(`NOTICE: FHL Codex image generation is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${FHL_SIZE_LIMIT_NOTICE}`);
+    console.warn(`NOTICE: 88API image generation is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${API_SIZE_LIMIT_NOTICE}`);
   }
 
   if (flags.size) {
@@ -3021,7 +3076,7 @@ function resolveGenerationParams(flags, modeConfig) {
   const requestedRatio = flags.aspect ?? flags.ratio ?? modeConfig?.ratio ?? DEFAULTS.ratio;
   let ratio = normalizeRatio(requestedRatio);
   if (isDisabledRatio(ratio)) {
-    console.error(`ERROR: Ratio="${requestedRatio}" is disabled in this plugin because repeated real FHL tests returned upstream 502 for 5:4, 4:5, 3:1, and 1:3. Use one of: ${supportedRatioText()}.`);
+    console.error(`ERROR: Ratio="${requestedRatio}" is disabled because repeated upstream tests returned 502 for 5:4, 4:5, 3:1, and 1:3. Use one of: ${supportedRatioText()}.`);
     process.exit(1);
   }
   const size = resolveSize(quality, ratio);
@@ -3060,7 +3115,7 @@ async function main() {
         : worker));
     }
     saveConfig(config);
-    console.log(`FHL API worker saved: ${previewKey(flags.setKey)} (${config.workers[0].name})`);
+    console.log(`88API worker saved: ${previewKey(flags.setKey)} (${config.workers[0].name})`);
     return;
   }
 
@@ -3143,7 +3198,7 @@ async function main() {
     const requestedQuality = flags.quality || previous.quality || DEFAULTS.quality;
     const quality = normalizeQuality(requestedQuality);
     if (shouldWarnFixedQuality(requestedQuality)) {
-      console.warn(`NOTICE: Quick mode is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${FHL_SIZE_LIMIT_NOTICE}`);
+      console.warn(`NOTICE: Quick mode is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${API_SIZE_LIMIT_NOTICE}`);
     }
     const ratio = normalizeRatio(flags.aspect ?? flags.ratio ?? previous.ratio ?? DEFAULTS.ratio);
     const count = clampInteger(flags.count ?? previous.count, 1, MAX_GENERATION_COUNT, DEFAULTS.count);
@@ -3164,7 +3219,7 @@ async function main() {
     const requestedQuality = flags.quality || previous.quality || DEFAULTS.quality;
     const quality = normalizeQuality(requestedQuality);
     if (shouldWarnFixedQuality(requestedQuality)) {
-      console.warn(`NOTICE: Batch mode is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${FHL_SIZE_LIMIT_NOTICE}`);
+      console.warn(`NOTICE: Batch mode is fixed to ${FIXED_REQUEST_QUALITY}; ignoring requested quality="${requestedQuality}". ${API_SIZE_LIMIT_NOTICE}`);
     }
     const ratio = normalizeRatio(flags.aspect ?? flags.ratio ?? previous.ratio ?? DEFAULTS.ratio);
     const concurrency = clampInteger(flags.concurrency ?? previous.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
@@ -3212,7 +3267,7 @@ async function main() {
 
   const configuredWorkers = getConfiguredWorkers(config);
   if (configuredWorkers.filter((worker) => worker.enabled !== false).length === 0) {
-    console.error("ERROR: No enabled FHL API worker is configured. Run --set-key <key> or --add-worker-key <key> first.");
+    console.error("ERROR: No enabled 88API worker is configured. Create an image-generation group key at https://88api.ai/ and run --set-key <YOUR_88API_IMAGE_GROUP_KEY>. Start with one worker; multiple workers use more memory.");
     process.exit(1);
   }
 
