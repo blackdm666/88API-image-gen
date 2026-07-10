@@ -5,7 +5,7 @@ description: "Generate or edit images with the 88api.ai Token aggregation servic
 
 # 88API-image-gen
 
-This is the Codex-native image generation plugin from the 88api.ai Token aggregation service. Use it to generate or edit raster images through the configured Responses API. Do not route image edits to `/v1/images/edits` in this plugin.
+This is the Codex-native image generation plugin from the 88api.ai Token aggregation service. It only calls `gpt-image-2` through `/v1/images/generations` and `/v1/images/edits`; no GPT text model permission is required. A single text-to-image task can opt into native Images API partial-image SSE previews.
 
 ## Script
 
@@ -37,7 +37,7 @@ node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --get-config
 
 The output is JSON with masked worker key previews. Never display a full API key.
 
-- If `workerCount` is `0` or `hasKey` is `false`, do not attempt generation. Explain that an 88API image-generation group key is required, direct the user to `https://88api.ai/`, and save the key locally with:
+- If `密钥状态` is `未配置` or `已配置密钥数` is `0`, do not attempt generation. Explain that an 88API image-generation group key is required, direct the user to `https://88api.ai/`, and save the key locally with:
 
 ```bash
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --set-key "<YOUR_88API_IMAGE_GROUP_KEY>"
@@ -62,6 +62,28 @@ Critical billing and stability warning:
 - A local crash, disconnect, or failure to save the returned image does not cancel requests already submitted to 88API. Requests accepted or completed by the cloud may still be billed.
 - Do not start a large batch until the user has seen this warning. For workflow batches, run `--dry-run` first and begin with `--limit 1 --concurrency 1`.
 
+## Codex Prompt Compiler and Orchestration
+
+The Codex model running this skill is the prompt planner. Prepare the final Image2 instruction from the current conversation without sending prompt planning to a separate external model.
+
+Before a paid image request, turn the user's request and conversation context into one clear Image2 instruction:
+
+- Preserve the user's intent, named people, brands, exact quoted text, numbers, required objects, and prohibitions.
+- For reference images, state the role of each image in argument order: identity, product, composition, style, background, or other user-defined role.
+- Add only useful composition, camera, lighting, material, color, background, and aspect details. Do not bloat a simple request.
+- Never invent poster copy, logos, claims, prices, names, or product features.
+- If the user says to use the prompt verbatim or not optimize it, pass the original prompt unchanged except for the script's required aspect suffix.
+- Do not expose the internal compiled prompt unless the user asks to review it.
+
+For an explicitly iterative request, Codex may orchestrate `generate -> inspect saved image -> edit`, using the saved result as the next reference. Each follow-up edit is a new paid request. Default to one generation only; perform at most one automatic corrective edit, and only when the user asked for iterative refinement. Never loop until "perfect" and never create extra variations without counting and disclosing them.
+
+Transport policy:
+
+- Default `--transport auto` and explicit `--transport images` both use the direct Images endpoints.
+- Responses transport is disabled because image-generation group keys must not require a GPT text model.
+- Real preview files are opt-in with `--preview` for one text-to-image task through `/v1/images/generations` SSE. Partial images may add image-output usage or charges, so enable them only when the user explicitly requests a live preview. Never enable preview files across a batch or edit task.
+- An accepted or unknown Images request must not be silently retried after timeout, broken SSE, or a missing final image. The cloud task may still be billed.
+
 ## Worker Pool Rules
 
 This plugin now supports one plugin with many independent API workers.
@@ -85,7 +107,7 @@ Important image-edit rule:
 - `--edit --image a --image b --prompt ...` without `--batch-edit` is still one combined multi-reference edit request and must stay on one worker
 - `--batch-edit --edit --image a --image b ...` means each source image is its own task and may be distributed across many workers
 
-If a retryable worker error occurs (`429`, `502`, `503`, `504`, `524`, rate limit, no available account, account pool busy, temporarily unavailable), that worker is cooled temporarily and queued work is retried on another healthy worker when possible.
+If a retryable worker error occurs before a task is accepted (`429`, `502`, `503`, `504`, `524`, rate limit, no available account, account pool busy, temporarily unavailable), that worker is cooled temporarily and queued work is retried on another healthy worker when possible. Errors marked `[NO-RETRY]` must never be resubmitted automatically.
 
 If an auth/key error occurs, that worker is disabled for the current run. Other healthy workers continue.
 
@@ -123,7 +145,7 @@ The ratios `5:4`, `4:5`, `3:1`, and `1:3` are disabled in this plugin because re
 
 The upstream service may return a near-aspect image with non-exact pixels. The script center-crops/resizes the saved PNG to the requested `WIDTHxHEIGHT` and reports `resized from <original>`. It uses System.Drawing on Windows, the built-in `sips` command on macOS, and ImageMagick (`magick` or `convert`) on Linux/Unix. Use `--no-resize` when testing the true upstream raster.
 
-For same-prompt multi-image requests, use `--count 1..9`. For longer continuous runs, use `--repeat 1..50`. Each image is a separate Responses request and can be distributed to different workers:
+For same-prompt multi-image requests, use `--count 1..9`. For longer continuous runs, use `--repeat 1..50`. Each image is a separate paid Images API request and can be distributed to different workers:
 
 ```bash
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --prompt "一只钓鱼的小猫" --count 2 --concurrency 1 --aspect 16:9
@@ -161,7 +183,7 @@ node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --workflow-batch-edit 
 - `--fixed-ref` 可重复，用于固定人物、品牌、场景、风格或商品基准图。
 - `--item-dir` 是批量变量图目录，例如产品、服装、道具、包装或家具等。
 - `--templates` 或 `--template-inline` 决定每个变量图需要生成哪些场景。
-- 每个变量图是一个任务组，每个模板对应一张独立的 Responses edit 图片。
+- 每个变量图是一个任务组，每个模板对应一张独立的付费 Images edit 图片。
 - 参考图顺序固定：所有 fixed refs 在前，当前变量图在最后。
 - 插件不假设产品类型；产品语义必须来自用户模板和参考图。
 
@@ -209,29 +231,26 @@ node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --workflow-batch-edit 
 
 ## Edit Existing Images
 
-The image-to-image chain is fixed in this plugin:
+The image-to-image chain always uses `gpt-image-2` Images API:
 
-- Endpoint: `POST https://88api.ai/v1/responses`
-- Text model: `gpt-5.5`
-- Image tool: `gpt-image-2`
-- Tool action: `edit`
-- Input method: first one `input_text`, then one `input_image` block per source image, in order
-- Output policy: `output_format:"png"`, `moderation:"low"`, `partial_images:0`, `stream:true`
-- This is not a collage step and not legacy multipart edit
+- Endpoint: `POST https://88api.ai/v1/images/edits`
+- Input method: multipart form data with ordered `image[]` files
+- Prompt planning remains in the current Codex conversation
+- This is not a collage step; reference roles follow the original CLI argument order
 
-Default image-to-image edits use Responses API with `input_image` and the image tool `action:"edit"`:
+Default single-image edits use Images API:
 
 ```bash
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --edit --image "<IMAGE_PATH>" --prompt "<EDIT_INSTRUCTION>" --aspect 9:16
 ```
 
-For multiple edit variations of one source, each variation is a separate Responses request and may be scheduled to different workers:
+For multiple edit variations of one source, each variation is a separate paid request and may be scheduled to different workers:
 
 ```bash
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --edit --image "<IMAGE_PATH>" --prompt "<EDIT_INSTRUCTION>" --count 2 --concurrency 1
 ```
 
-For multi-reference image-to-image, pass multiple `--image` flags. The plugin follows the 88API Responses behavior: each source image becomes its own `input_image` block inside one Responses edit request, in the same order as the CLI arguments:
+For multi-reference image-to-image, pass multiple `--image` flags. A single combined task uploads ordered multipart `image[]` files:
 
 ```bash
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --edit --image "<PATH_1>" --image "<PATH_2>" --prompt "<EDIT_INSTRUCTION>" --aspect 9:16
@@ -243,7 +262,7 @@ To force per-source batch behavior instead of one combined multi-reference reque
 node "$HOME/plugins/88api-image-gen/scripts/generate.mjs" --batch-edit --edit --image "<PATH_1>" --image "<PATH_2>" --prompt "<EDIT_INSTRUCTION>" --concurrency 1
 ```
 
-Do not use `--legacy-edit` or `--edit-api images` here. They are disabled so the image-edit chain stays fixed to Responses API.
+`--transport auto` and `--transport images` are accepted. Legacy Responses edit routes are rejected. Never automatically resend a paid request whose state is accepted or unknown.
 
 ## Nail Try-On Preset / Legacy Stress Test
 
@@ -265,7 +284,7 @@ Compatibility rules for this command:
   - hand half face
   - half body pose
   - full body scene
-- Each scene is one independent Responses edit request and may go to a different healthy worker
+- Each scene is one independent paid Images edit request and may go to a different healthy worker
 - The persona image is loaded once; product images are loaded on demand task by task
 - Output root defaults to:
   - `~/Pictures/88api-image-gen/nail-stress-test_<timestamp>`
@@ -294,16 +313,16 @@ node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --nail-stress-test --p
 
 ## API Contract
 
-- Text-to-image: `POST https://88api.ai/v1/responses`
-- Image edit: `POST https://88api.ai/v1/responses`
-- Responses text model: `gpt-5.5`
-- Image generation tool model: `gpt-image-2`
+- Text-to-image: `POST https://88api.ai/v1/images/generations`
+- Image edit: `POST https://88api.ai/v1/images/edits`
+- Model: always `gpt-image-2`; GPT text-model permission is not required
 - Request size policy: always use the fixed 2K preset matrix and the supported aspect list above; do not request 1K, 4K, disabled ratios, or arbitrary `--size`
 - Auth: `Authorization: Bearer <88API Key>`
-- Responses body: JSON with `model`, `input`, `tools`, `tool_choice`, `reasoning`, `store:false`, and `stream:true`
-- Edit Responses input: `input_text` plus one `input_image` data URL per source image, in order
-- Edit Responses tool: `type:"image_generation"`, `action:"edit"`, `output_format:"png"`, `moderation:"low"`, `partial_images:0`
-- Responses result parsing: final image comes from SSE event `response.output_item.done` where `item.type` is `image_generation_call` and `item.result` is base64 image data
+- Images generation body: JSON with `model`, `prompt`, `size`, and `n:1`
+- Preview generation adds `stream:true` and `partial_images:1`, consumes `image_generation.partial_image` SSE incrementally, and saves the final image
+- Images edit body: multipart form data with `model`, `prompt`, `size`, `n`, and ordered `image[]` files
+- Images result parsing: read `data[].b64_json`, with URL download fallback when the gateway returns `data[].url`
+- Safety: never cross-fallback or automatically retry after an accepted/unknown paid request marked `[NO-RETRY]`
 - Worker routing rule: single task = single worker; multiple independent tasks = many workers when available
 - Workflow batch edit: generic fixed refs + variable item ref + user templates. Do not assume product type.
 - Workflow reliability: resume existing PNG outputs, auto repair missing outputs, and write `manifest.json`, `summary.csv`, `failures.json`, and `sessions.json`.
@@ -319,7 +338,8 @@ node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --get-config
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --list-workers
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --resolve-size --aspect 9:16
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --self-test-adaptive
-node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --self-test-edit-responses
+node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --self-test-images-api
+node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --self-test-image-stream
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --self-test-workflow
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --workflow-batch-edit --fixed-ref "<人物参考图.png>" --item-dir "<产品图目录>" --preset nail-tryon --limit 1 --concurrency 1 --aspect 9:16 --dry-run
 node "$HOME\plugins\88api-image-gen\scripts\generate.mjs" --nail-stress-test --persona "<人物参考图.png>" --product-dir "<产品图目录>" --limit 1 --concurrency 1 --dry-run
