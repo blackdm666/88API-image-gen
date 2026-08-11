@@ -3402,7 +3402,7 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.log(`88API-image-gen ${PLUGIN_VERSION}
+  console.log(`88API-Image-Gen ${PLUGIN_VERSION}
 
 CONFIG
   --get-config

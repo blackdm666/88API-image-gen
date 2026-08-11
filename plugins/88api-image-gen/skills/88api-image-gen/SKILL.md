@@ -3,7 +3,7 @@ name: 88api-image-gen
 description: Generate or edit images through 88api.ai with gpt-image-2 or gpt-image-2-4k over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, or workflow batch editing.
 ---
 
-# 88API-image-gen
+# 88API-Image-Gen
 
 Use this skill for image generation and image editing through the installed 88API plugin. It supports two models, OpenAI Images generation/edit endpoints, partial-image SSE for one text-to-image task, one auto-group Key with concurrent request slots, batch tasks, and resumable workflows.
 
