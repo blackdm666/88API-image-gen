@@ -1,4 +1,4 @@
 interface:
   display_name: "88API-Image-Gen"
-  short_description: "默认 Image2 2K，可按需使用 Image2 4K"
+  short_description: "Image-2 默认 2K，支持 4K、批量出图与图生图"
   default_prompt: "使用 $88api-image-gen 生成或编辑图片；普通任务使用默认 Image2，明确要求 4K 时使用 Image2 4K。"
