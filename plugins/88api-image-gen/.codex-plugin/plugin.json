@@ -1,6 +1,6 @@
 {
   "name": "88api-image-gen",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、Image2 4K、SSE 与批量工作流。",
   "author": {
     "name": "88api.ai"
@@ -9,7 +9,7 @@
   "repository": "https://github.com/blackdm666/88API-image-gen",
   "skills": "./skills/",
   "interface": {
-    "displayName": "88API-image-gen",
+    "displayName": "88API-Image-Gen",
     "shortDescription": "默认 Image2 2K，可按需使用 Image2 4K。",
     "longDescription": "来源于 88api.ai Token 聚合站的 Codex 专用生图插件，通过 OpenAI Images API 支持 gpt-image-2 与 gpt-image-2-4k，并以单个 auto 分组 Key 支持文生图、编辑、多参考图、SSE、并发批量工作流、固定比例尺寸校验与费用安全控制。",
     "developerName": "88api.ai",

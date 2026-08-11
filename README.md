@@ -1,4 +1,4 @@
-# 88API-image-gen
+# 88API-Image-Gen
 
 来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用生图插件。通过 OpenAI Images API 支持文生图、参考图编辑、多参考图、SSE 预览、批量任务、workflow 和本地保存。
 
@@ -34,13 +34,13 @@ node plugins/88api-image-gen/scripts/generate.mjs --self-test
 
 ## 在 Codex 中使用
 
-在新任务中输入 `@`，选择 **88API-image-gen**，然后直接描述需求：
+在新任务中输入 `@`，选择 **88API-Image-Gen**，然后直接描述需求：
 
 ```text
-@88API-image-gen 生成一张 16:9 的雨夜城市海报。
-@88API-image-gen 用 4K 生成一张产品主视觉。
-@88API-image-gen 使用我附加的人物图和产品图，生成一张 16:9 的 4K 展示图。
-@88API-image-gen 根据这个要求生成 3 张不同方案。
+@88API-Image-Gen 生成一张 16:9 的雨夜城市海报。
+@88API-Image-Gen 用 4K 生成一张产品主视觉。
+@88API-Image-Gen 使用我附加的人物图和产品图，生成一张 16:9 的 4K 展示图。
+@88API-Image-Gen 根据这个要求生成 3 张不同方案。
 ```
 
 普通任务使用 `gpt-image-2`。用户明确要求 4K 时，单次使用 `gpt-image-2-4k`；只有用户明确要求改变长期默认模型时才执行 `--set-model`。
