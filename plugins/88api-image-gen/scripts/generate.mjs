@@ -4,20 +4,17 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { deflateSync, inflateSync } from "node:zlib";
 
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "2.0.0";
 const DEFAULT_MODEL = "gpt-image-2";
-const ADOBE_MODEL = "gpt-image-2-adobe";
 const MODEL_INFO = [
   {
     id: "gpt-image-2",
     default: true,
     resolution: "2K",
-    capabilities: { transparentBackground: false, customSizes: false, nonNativeRatios: false },
     profile: "标准 2K 与兼容性优先",
     recommendedFor: ["日常文生图", "常规参考图编辑", "批量生产"],
   },
@@ -25,17 +22,8 @@ const MODEL_INFO = [
     id: "gpt-image-2-4k",
     default: false,
     resolution: "4K",
-    capabilities: { transparentBackground: false, customSizes: false, nonNativeRatios: false },
     profile: "4K 高分辨率输出",
     recommendedFor: ["4K 海报", "大屏与印刷素材", "高分辨率参考图编辑"],
-  },
-  {
-    id: "gpt-image-2-adobe",
-    default: false,
-    resolution: "4K",
-    capabilities: { transparentBackground: true, customSizes: true, nonNativeRatios: true },
-    profile: "Adobe 4K、透明通道与自定义尺寸线路",
-    recommendedFor: ["透明背景 PNG", "21:9 等非原生比例", "自定义尺寸", "明确指定 Adobe 的任务"],
   },
 ];
 const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
@@ -53,20 +41,11 @@ const MAX_EDIT_SOURCES = 10;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 180_000;
-const IMAGE_BACKGROUNDS = new Set(["auto", "opaque", "transparent"]);
-const TRANSPARENT_KEY_COLORS = [
-  { name: "green", hex: "#00FF00", r: 0, g: 255, b: 0 },
-  { name: "magenta", hex: "#FF00FF", r: 255, g: 0, b: 255 },
-];
-const TRANSPARENT_PROMPT_TEMPLATE = [
-  "[透明背景处理指令]",
-  "如果主体包含绿色、青绿色、黄绿色或草绿色，使用纯洋红色 (#FF00FF) 填充整张背景；否则使用纯绿色 (#00FF00) 填充整张背景。",
-  "背景必须是完全均匀的单一纯色，不得出现渐变、纹理、棋盘格、阴影、光照变化、地面或环境元素。",
-  "主体应完整呈现、轮廓清晰，并与纯色背景保持干净的边缘分离。主体、描边、光晕、投影和反射不得使用所选背景色。",
-  "这是用于生成真实 PNG Alpha 通道的键色源图；不要直接模拟透明棋盘格。",
-].join("\n");
-const MAX_CUSTOM_EDGE = 16_384;
-const MAX_CUSTOM_PIXELS = 67_108_864;
+const IMAGE_SIZE_STEP = 16;
+const IMAGE_MIN_PIXELS = 655_360;
+const IMAGE_MAX_PIXELS = 8_294_400;
+const IMAGE_MAX_EDGE = 3_840;
+const IMAGE_MAX_RATIO = 3;
 const SUPPORTED_RATIOS = [
   "1:1",
   "3:2",
@@ -81,37 +60,16 @@ const SUPPORTED_RATIOS = [
   "4:7",
 ];
 const SIZE_MATRIX = {
-  "1K": {
-    "1:1": "1024x1024",
-    "3:2": "1536x1024",
-    "2:3": "1024x1536",
-    "4:3": "1536x1152",
-    "3:4": "1152x1536",
-    "5:4": "1520x1216",
-    "4:5": "1216x1520",
-    "16:9": "1536x864",
-    "9:16": "864x1536",
-    "2:1": "1536x768",
-    "1:2": "768x1536",
-    "3:1": "1536x512",
-    "1:3": "512x1536",
-    "7:4": "1664x944",
-    "4:7": "944x1664",
-  },
   "2K": {
     "1:1": "2048x2048",
     "3:2": "2048x1360",
     "2:3": "1360x2048",
     "4:3": "2048x1536",
     "3:4": "1536x2048",
-    "5:4": "2040x1632",
-    "4:5": "1632x2040",
     "16:9": "2048x1152",
     "9:16": "1152x2048",
     "2:1": "2048x1024",
     "1:2": "1024x2048",
-    "3:1": "2040x680",
-    "1:3": "680x2040",
     "7:4": "2208x1264",
     "4:7": "1264x2208",
   },
@@ -119,16 +77,12 @@ const SIZE_MATRIX = {
     "1:1": "2880x2880",
     "3:2": "3520x2352",
     "2:3": "2352x3520",
-    "4:3": "3840x2880",
-    "3:4": "2880x3840",
-    "5:4": "3840x3072",
-    "4:5": "3072x3840",
+    "4:3": "3264x2448",
+    "3:4": "2448x3264",
     "16:9": "3840x2160",
     "9:16": "2160x3840",
     "2:1": "3840x1920",
     "1:2": "1920x3840",
-    "3:1": "3840x1280",
-    "1:3": "1280x3840",
     "7:4": "3808x2176",
     "4:7": "2176x3808",
   },
@@ -365,7 +319,6 @@ function buildConfigSummary(config) {
     出厂默认模型: DEFAULT_MODEL,
     当前模型分辨率: modelResolution(MODELS.has(config?.model) ? config.model : DEFAULT_MODEL),
     可用模型: MODEL_INFO.map(({ id }) => id),
-    能力自动路由: `透明背景、自定义尺寸、非原生比例 -> ${ADOBE_MODEL}（仅单次，不改默认）`,
     快速模式: config?.quickMode || null,
     批量模式: config?.batchMode || null,
   };
@@ -419,12 +372,6 @@ function effectiveModel(flags, config) {
   return validateModel(flags?.model || config?.model || DEFAULT_MODEL);
 }
 
-function normalizeBackground(value) {
-  if (value == null || value === "") return null;
-  const normalized = String(value).trim().toLowerCase();
-  return IMAGE_BACKGROUNDS.has(normalized) ? normalized : null;
-}
-
 function normalizeQuality(quality, model = DEFAULT_MODEL) {
   return modelResolution(model);
 }
@@ -450,51 +397,9 @@ function parseRatioParts(ratio) {
   return { left: left / divisor, right: right / divisor, normalized };
 }
 
-function isNativeImage2Ratio(ratio) {
+function isSupportedRatio(ratio) {
   const parsed = parseRatioParts(ratio);
   return !!parsed && SUPPORTED_RATIOS.includes(`${parsed.left}:${parsed.right}`);
-}
-
-function resolveAdobeAspectSize(ratio) {
-  const parsed = parseRatioParts(ratio);
-  if (!parsed) return null;
-  const unit = Math.floor(3840 / Math.max(parsed.left, parsed.right));
-  const alignedUnit = unit >= 16 ? Math.floor(unit / 16) * 16 : unit;
-  if (alignedUnit <= 0) return null;
-  return `${parsed.left * alignedUnit}x${parsed.right * alignedUnit}`;
-}
-
-function validateCustomSize(size) {
-  const parsed = parseSizeForAspect(size);
-  if (!parsed) return null;
-  if (parsed.width > MAX_CUSTOM_EDGE || parsed.height > MAX_CUSTOM_EDGE) return null;
-  if (parsed.width * parsed.height > MAX_CUSTOM_PIXELS) return null;
-  const value = `${parsed.width}x${parsed.height}`;
-  return { ...parsed, value, aspect: aspectRatioForSize(value) };
-}
-
-function resolveCapabilityModel(flags, config, requestedRatio) {
-  const requestedModel = effectiveModel(flags, config);
-  if (flags?.transparent === true && flags?.background != null && normalizeBackground(flags.background) !== "transparent") {
-    throw new Error("--transparent conflicts with --background. Remove one or use --background transparent.");
-  }
-  const backgroundValue = flags?.transparent === true ? "transparent" : flags?.background;
-  const background = backgroundValue == null ? null : normalizeBackground(backgroundValue);
-  if (backgroundValue != null && !background) {
-    throw new Error(`Invalid background="${backgroundValue}". Use auto, opaque, or transparent.`);
-  }
-  const routingReasons = [];
-  if (background === "transparent") routingReasons.push("transparent background");
-  if (flags?.size) routingReasons.push("custom size");
-  if (requestedRatio && !isNativeImage2Ratio(requestedRatio)) routingReasons.push(`non-native aspect ${normalizeRatio(requestedRatio)}`);
-  const model = routingReasons.length > 0 ? ADOBE_MODEL : requestedModel;
-  return {
-    requestedModel,
-    model,
-    background,
-    autoSwitched: model !== requestedModel,
-    routingReasons,
-  };
 }
 
 function ratioLabel(ratio) {
@@ -507,28 +412,30 @@ function supportedRatioText() {
   return SUPPORTED_RATIOS.join(", ");
 }
 
-function normalizeSizeString(size) {
-  const parsed = parseSizeForAspect(size);
-  if (!parsed) return null;
-  return `${parsed.width}x${parsed.height}`;
-}
-
-function aspectRatioForSize(size) {
-  const parsed = parseSizeForAspect(size);
-  if (!parsed) return null;
-  const divisor = gcd(parsed.width, parsed.height);
-  if (!divisor) return null;
-  return `${parsed.width / divisor}:${parsed.height / divisor}`;
-}
-
-function resolveSize(model, ratio, explicitSize = null) {
-  if (explicitSize) return normalizeSizeString(explicitSize);
+function resolveSize(model, ratio) {
   const normalizedQuality = modelResolution(model);
   const ratioParts = parseRatioParts(ratio);
   const normalizedRatio = ratioParts ? `${ratioParts.left}:${ratioParts.right}` : normalizeRatio(ratio);
   if (!normalizedQuality) return null;
-  return SIZE_MATRIX[normalizedQuality]?.[normalizedRatio]
-    || (model === ADOBE_MODEL ? resolveAdobeAspectSize(normalizedRatio) : null);
+  return SIZE_MATRIX[normalizedQuality]?.[normalizedRatio] || null;
+}
+
+function imageSizeValidationError(size) {
+  const parsed = parseSizeForAspect(size);
+  if (!parsed) return `Invalid image size "${size}".`;
+  const { width, height } = parsed;
+  const pixels = width * height;
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) {
+    return `Image size ${size} must use ${IMAGE_SIZE_STEP}-pixel increments.`;
+  }
+  if (longEdge > IMAGE_MAX_EDGE) return `Image size ${size} exceeds the ${IMAGE_MAX_EDGE}px maximum edge.`;
+  if (longEdge / shortEdge > IMAGE_MAX_RATIO) return `Image size ${size} exceeds the ${IMAGE_MAX_RATIO}:1 maximum aspect ratio.`;
+  if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) {
+    return `Image size ${size} has ${pixels} pixels; allowed range is ${IMAGE_MIN_PIXELS}-${IMAGE_MAX_PIXELS}.`;
+  }
+  return null;
 }
 
 function clampInteger(value, min, max, fallback) {
@@ -841,7 +748,6 @@ function saveBase64ImageToPath(base64, path, targetSize = null) {
 function formatImageResult(result) {
   const parts = [result.fileSize].filter(Boolean);
   if (result.dimensions) parts.push(result.dimensions);
-  if (result.transparent) parts.push(`transparent PNG (${result.alphaMode === "native" ? "native alpha" : `keyed ${result.keyColor || "background"}`})`);
   if (result.resized && result.originalDimensions) parts.push(`resized from ${result.originalDimensions}`);
   if (result.resizeError) parts.push(`resize warning: ${result.resizeError}`);
   return parts.join(", ");
@@ -892,326 +798,6 @@ function readPngDimensions(buffer) {
   return {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
-  };
-}
-
-function parsePngChunks(buffer) {
-  const dimensions = readPngDimensions(buffer);
-  if (!dimensions) throw new Error("Transparent background post-processing requires a valid PNG");
-  const chunks = [];
-  let offset = 8;
-  while (offset + 12 <= buffer.length) {
-    const length = buffer.readUInt32BE(offset);
-    const type = buffer.toString("ascii", offset + 4, offset + 8);
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-    if (dataEnd + 4 > buffer.length) throw new Error(`Invalid PNG chunk ${type || "unknown"}`);
-    chunks.push({ type, data: buffer.subarray(dataStart, dataEnd) });
-    offset = dataEnd + 4;
-    if (type === "IEND") break;
-  }
-  return { ...dimensions, chunks };
-}
-
-function paethPredictor(left, up, upLeft) {
-  const prediction = left + up - upLeft;
-  const leftDistance = Math.abs(prediction - left);
-  const upDistance = Math.abs(prediction - up);
-  const upLeftDistance = Math.abs(prediction - upLeft);
-  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
-  if (upDistance <= upLeftDistance) return up;
-  return upLeft;
-}
-
-function decodePng8(buffer) {
-  const parsed = parsePngChunks(buffer);
-  const ihdr = parsed.chunks.find(({ type }) => type === "IHDR")?.data;
-  if (!ihdr || ihdr.length !== 13) throw new Error("PNG IHDR is missing or invalid");
-  const bitDepth = ihdr[8];
-  const colorType = ihdr[9];
-  const compression = ihdr[10];
-  const filterMethod = ihdr[11];
-  const interlace = ihdr[12];
-  if (bitDepth !== 8 || ![2, 6].includes(colorType) || compression !== 0 || filterMethod !== 0 || interlace !== 0) {
-    throw new Error(`Unsupported PNG for transparent post-processing (bitDepth=${bitDepth}, colorType=${colorType}, interlace=${interlace})`);
-  }
-
-  const bytesPerPixel = colorType === 6 ? 4 : 3;
-  const stride = parsed.width * bytesPerPixel;
-  const compressed = Buffer.concat(parsed.chunks.filter(({ type }) => type === "IDAT").map(({ data }) => data));
-  if (!compressed.length) throw new Error("PNG has no IDAT data");
-  const filtered = inflateSync(compressed);
-  const expected = (stride + 1) * parsed.height;
-  if (filtered.length < expected) throw new Error("PNG decompressed data is incomplete");
-
-  const pixels = Buffer.allocUnsafe(stride * parsed.height);
-  for (let y = 0; y < parsed.height; y += 1) {
-    const filter = filtered[y * (stride + 1)];
-    if (filter > 4) throw new Error(`Unsupported PNG row filter ${filter}`);
-    const sourceStart = y * (stride + 1) + 1;
-    const rowStart = y * stride;
-    const previousRowStart = rowStart - stride;
-    for (let x = 0; x < stride; x += 1) {
-      const raw = filtered[sourceStart + x];
-      const left = x >= bytesPerPixel ? pixels[rowStart + x - bytesPerPixel] : 0;
-      const up = y > 0 ? pixels[previousRowStart + x] : 0;
-      const upLeft = y > 0 && x >= bytesPerPixel ? pixels[previousRowStart + x - bytesPerPixel] : 0;
-      let value = raw;
-      if (filter === 1) value += left;
-      else if (filter === 2) value += up;
-      else if (filter === 3) value += Math.floor((left + up) / 2);
-      else if (filter === 4) value += paethPredictor(left, up, upLeft);
-      pixels[rowStart + x] = value & 0xff;
-    }
-  }
-
-  return {
-    ...parsed,
-    bitDepth,
-    colorType,
-    bytesPerPixel,
-    pixels,
-  };
-}
-
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < table.length; index += 1) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
-    table[index] = value >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buffer) {
-  let crc = 0xffffffff;
-  for (const value of buffer) crc = CRC32_TABLE[(crc ^ value) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function buildPngChunk(type, data = Buffer.alloc(0)) {
-  const typeBuffer = Buffer.from(type, "ascii");
-  const chunk = Buffer.allocUnsafe(12 + data.length);
-  chunk.writeUInt32BE(data.length, 0);
-  typeBuffer.copy(chunk, 4);
-  data.copy(chunk, 8);
-  chunk.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 8 + data.length);
-  return chunk;
-}
-
-function encodeRgbaPng(width, height, pixels) {
-  if (pixels.length !== width * height * 4) throw new Error("RGBA pixel data size does not match PNG dimensions");
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-  const stride = width * 4;
-  const filtered = Buffer.allocUnsafe((stride + 1) * height);
-  for (let y = 0; y < height; y += 1) {
-    const rowStart = y * (stride + 1);
-    filtered[rowStart] = 0;
-    pixels.copy(filtered, rowStart + 1, y * stride, (y + 1) * stride);
-  }
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    buildPngChunk("IHDR", ihdr),
-    buildPngChunk("IDAT", deflateSync(filtered, { level: 9 })),
-    buildPngChunk("IEND"),
-  ]);
-}
-
-function colorDistance(red, green, blue, keyColor) {
-  return Math.sqrt((red - keyColor.r) ** 2 + (green - keyColor.g) ** 2 + (blue - keyColor.b) ** 2);
-}
-
-function keyColorConfidence(red, green, blue, keyColor) {
-  return Math.max(0, Math.min(1, (150 - colorDistance(red, green, blue, keyColor)) / 150));
-}
-
-function detectTransparentKeyColor(pixels, width, height, bytesPerPixel) {
-  const scores = TRANSPARENT_KEY_COLORS.map((keyColor) => ({ keyColor, matches: 0, distance: 0, samples: 0 }));
-  const sample = (index) => {
-    const offset = index * bytesPerPixel;
-    const red = pixels[offset];
-    const green = pixels[offset + 1];
-    const blue = pixels[offset + 2];
-    for (const score of scores) {
-      const distance = colorDistance(red, green, blue, score.keyColor);
-      score.distance += distance;
-      score.samples += 1;
-      if (distance < 100) score.matches += 1;
-    }
-  };
-  for (let x = 0; x < width; x += 1) {
-    sample(x);
-    if (height > 1) sample((height - 1) * width + x);
-  }
-  for (let y = 1; y < height - 1; y += 1) {
-    sample(y * width);
-    if (width > 1) sample(y * width + width - 1);
-  }
-  scores.sort((left, right) => right.matches - left.matches || left.distance - right.distance);
-  return { ...scores[0], alternative: scores[1] };
-}
-
-function rgbaPixelsFromDecodedPng(decoded) {
-  if (decoded.colorType === 6) return Buffer.from(decoded.pixels);
-  const rgba = Buffer.allocUnsafe(decoded.width * decoded.height * 4);
-  const transparentChunk = decoded.chunks.find(({ type }) => type === "tRNS")?.data;
-  const transparentRgb = transparentChunk?.length >= 6
-    ? { r: transparentChunk.readUInt16BE(0) & 0xff, g: transparentChunk.readUInt16BE(2) & 0xff, b: transparentChunk.readUInt16BE(4) & 0xff }
-    : null;
-  for (let index = 0; index < decoded.width * decoded.height; index += 1) {
-    const sourceOffset = index * 3;
-    const targetOffset = index * 4;
-    const red = decoded.pixels[sourceOffset];
-    const green = decoded.pixels[sourceOffset + 1];
-    const blue = decoded.pixels[sourceOffset + 2];
-    rgba[targetOffset] = red;
-    rgba[targetOffset + 1] = green;
-    rgba[targetOffset + 2] = blue;
-    rgba[targetOffset + 3] = transparentRgb && red === transparentRgb.r && green === transparentRgb.g && blue === transparentRgb.b ? 0 : 255;
-  }
-  return rgba;
-}
-
-function alphaPixelCounts(rgba) {
-  let transparentPixels = 0;
-  let partialAlphaPixels = 0;
-  for (let offset = 3; offset < rgba.length; offset += 4) {
-    if (rgba[offset] === 0) transparentPixels += 1;
-    else if (rgba[offset] < 255) partialAlphaPixels += 1;
-  }
-  return { transparentPixels, partialAlphaPixels };
-}
-
-function removeKeyColorFromRgba(rgba, width, height, keyColor) {
-  const pixelCount = width * height;
-  const confidenceAt = (index) => {
-    const offset = index * 4;
-    return keyColorConfidence(rgba[offset], rgba[offset + 1], rgba[offset + 2], keyColor);
-  };
-  let state = null;
-  if (pixelCount <= 20_000_000) {
-    state = new Uint8Array(pixelCount);
-    const queue = new Uint32Array(pixelCount);
-    let queueStart = 0;
-    let queueEnd = 0;
-    const enqueue = (index) => {
-      if (state[index]) return;
-      state[index] = 1;
-      if (confidenceAt(index) < 0.18) return;
-      state[index] = 2;
-      queue[queueEnd] = index;
-      queueEnd += 1;
-    };
-
-    for (let x = 0; x < width; x += 1) {
-      enqueue(x);
-      if (height > 1) enqueue((height - 1) * width + x);
-    }
-    for (let y = 1; y < height - 1; y += 1) {
-      enqueue(y * width);
-      if (width > 1) enqueue(y * width + width - 1);
-    }
-    while (queueStart < queueEnd) {
-      const index = queue[queueStart];
-      queueStart += 1;
-      const x = index % width;
-      const y = Math.floor(index / width);
-      if (x > 0) enqueue(index - 1);
-      if (x < width - 1) enqueue(index + 1);
-      if (y > 0) enqueue(index - width);
-      if (y < height - 1) enqueue(index + width);
-    }
-  }
-
-  let transparentPixels = 0;
-  let partialAlphaPixels = 0;
-  for (let index = 0; index < pixelCount; index += 1) {
-    const offset = index * 4;
-    const confidence = confidenceAt(index);
-    const isBackground = state ? state[index] === 2 || confidence >= 0.42 : confidence >= 0.18;
-    let alpha = 255;
-    if (isBackground) alpha = 0;
-    else if (confidence > 0.08) alpha = Math.max(96, Math.round(255 * (1 - Math.min(0.65, ((confidence - 0.08) / 0.92) * 0.7))));
-
-    if (alpha === 0) {
-      rgba[offset] = 0;
-      rgba[offset + 1] = 0;
-      rgba[offset + 2] = 0;
-      transparentPixels += 1;
-    } else if (alpha < 255) {
-      const backgroundMix = (255 - alpha) / 255;
-      const foregroundMix = Math.max(0.08, 1 - backgroundMix);
-      rgba[offset] = Math.max(0, Math.min(255, Math.round((rgba[offset] - keyColor.r * backgroundMix) / foregroundMix)));
-      rgba[offset + 1] = Math.max(0, Math.min(255, Math.round((rgba[offset + 1] - keyColor.g * backgroundMix) / foregroundMix)));
-      rgba[offset + 2] = Math.max(0, Math.min(255, Math.round((rgba[offset + 2] - keyColor.b * backgroundMix) / foregroundMix)));
-      partialAlphaPixels += 1;
-    }
-    rgba[offset + 3] = alpha;
-  }
-  return { transparentPixels, partialAlphaPixels };
-}
-
-function makeTransparentPngBuffer(buffer) {
-  const decoded = decodePng8(buffer);
-  const rgba = rgbaPixelsFromDecodedPng(decoded);
-  const existingAlpha = alphaPixelCounts(rgba);
-  if (existingAlpha.transparentPixels > 0 || existingAlpha.partialAlphaPixels > 0) {
-    return {
-      buffer,
-      width: decoded.width,
-      height: decoded.height,
-      alreadyTransparent: true,
-      keyColor: null,
-      ...existingAlpha,
-    };
-  }
-
-  const detected = detectTransparentKeyColor(decoded.pixels, decoded.width, decoded.height, decoded.bytesPerPixel);
-  const converted = removeKeyColorFromRgba(rgba, decoded.width, decoded.height, detected.keyColor);
-  if (converted.transparentPixels === 0) {
-    throw new Error("[NO-RETRY] Transparent post-processing found no green or magenta key background in the paid image result");
-  }
-  return {
-    buffer: encodeRgbaPng(decoded.width, decoded.height, rgba),
-    width: decoded.width,
-    height: decoded.height,
-    alreadyTransparent: false,
-    keyColor: detected.keyColor.hex,
-    keyColorName: detected.keyColor.name,
-    keyMatches: detected.matches,
-    ...converted,
-  };
-}
-
-function finalizeTransparentSavedImage(saved, background) {
-  if (!saved || background !== "transparent") return saved;
-  const sourceBuffer = readFileSync(saved.path);
-  const converted = makeTransparentPngBuffer(sourceBuffer);
-  if (converted.buffer !== sourceBuffer) {
-    const tmpPath = `${saved.path}.alpha-${process.pid}-${Date.now()}.png`;
-    writeFileSync(tmpPath, converted.buffer);
-    replaceFileFromTemp(tmpPath, saved.path);
-  }
-  const finalBuffer = converted.buffer;
-  return {
-    ...saved,
-    fileSize: `${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB`,
-    width: converted.width,
-    height: converted.height,
-    dimensions: `${converted.width}x${converted.height}`,
-    transparent: true,
-    alphaMode: converted.alreadyTransparent ? "native" : "chroma-key",
-    keyColor: converted.keyColor,
-    transparentPixels: converted.transparentPixels,
-    partialAlphaPixels: converted.partialAlphaPixels,
   };
 }
 
@@ -1385,19 +971,15 @@ function aspectPromptSuffixForSize(size) {
   return `请严格按照 ${aspect} 横版画幅生成最终图片，整张图片必须为 ${aspect} 横向构图，不要正方形，不要竖版。`;
 }
 
-function imageApiPrompt(prompt, size, options = {}) {
+function imageApiPrompt(prompt, size) {
   const aspectPromptSuffix = aspectPromptSuffixForSize(size);
-  return [
-    prompt,
-    aspectPromptSuffix,
-    options.background === "transparent" ? TRANSPARENT_PROMPT_TEMPLATE : "",
-  ].filter(Boolean).join("\n\n");
+  return [prompt, aspectPromptSuffix].filter(Boolean).join("\n\n");
 }
 
 function buildImagesGenerationBody(model, prompt, size, options = {}) {
   const body = {
     model: validateModel(model),
-    prompt: imageApiPrompt(prompt, size, options),
+    prompt: imageApiPrompt(prompt, size),
     size,
     n: 1,
   };
@@ -1405,19 +987,15 @@ function buildImagesGenerationBody(model, prompt, size, options = {}) {
     body.stream = true;
     body.partial_images = 1;
   }
-  if (options.background) body.background = options.background;
-  if (options.background === "transparent") body.output_format = "png";
   return body;
 }
 
 function buildImagesEditForm(model, prompt, size, sources, options = {}) {
   const form = new FormData();
   form.append("model", validateModel(model));
-  form.append("prompt", imageApiPrompt(prompt, size, options));
+  form.append("prompt", imageApiPrompt(prompt, size));
   form.append("size", size);
   form.append("n", "1");
-  if (options.background) form.append("background", options.background);
-  if (options.background === "transparent") form.append("output_format", "png");
   for (const source of sources) {
     const sourceBuffer = options.redactImageData ? Buffer.from(`<redacted ${source.sourceBuffer.length} bytes>`) : source.sourceBuffer;
     const blob = new Blob([sourceBuffer], { type: source.mimeType || "image/png" });
@@ -1440,7 +1018,7 @@ function dryRunReferenceSummary(imagePaths = []) {
   });
 }
 
-function buildDryRunPlan({ mode, requestedModel = null, model, autoSwitched = false, routingReasons = [], background = null, size, aspect, prompts = [], imagePaths = [], count = 1, concurrency = 1, preview = false }) {
+function buildDryRunPlan({ mode, model, size, aspect, prompts = [], imagePaths = [], count = 1, concurrency = 1, preview = false }) {
   const editing = imagePaths.length > 0;
   const endpoint = editing ? IMAGES_EDITS_URL : IMAGES_GENERATIONS_URL;
   const references = editing ? dryRunReferenceSummary(imagePaths) : [];
@@ -1448,14 +1026,12 @@ function buildDryRunPlan({ mode, requestedModel = null, model, autoSwitched = fa
   const request = editing
     ? {
         model,
-        prompt: imageApiPrompt(samplePrompt, size, { background }),
+        prompt: imageApiPrompt(samplePrompt, size),
         size,
         n: 1,
-        ...(background ? { background } : {}),
-        ...(background === "transparent" ? { output_format: "png" } : {}),
         "image[]": references,
       }
-    : buildImagesGenerationBody(model, samplePrompt, size, { preview, background });
+    : buildImagesGenerationBody(model, samplePrompt, size, { preview });
   return {
     dryRun: true,
     paidApiCalled: false,
@@ -1463,12 +1039,8 @@ function buildDryRunPlan({ mode, requestedModel = null, model, autoSwitched = fa
     method: "POST",
     endpoint,
     mode,
-    requestedModel: requestedModel || model,
     model,
-    autoSwitched,
-    routingReasons,
     resolution: modelResolution(model),
-    background: background || "auto",
     aspect,
     size,
     taskCount: count,
@@ -1501,12 +1073,11 @@ async function imageApiResultBase64(data) {
   return Buffer.from(await res.arrayBuffer()).toString("base64");
 }
 
-function imageApiLogSummary(data, requestedModel = DEFAULT_MODEL, requestedBackground = "auto") {
+function imageApiLogSummary(data, requestedModel = DEFAULT_MODEL) {
   const items = Array.isArray(data?.data) ? data.data : [];
   return {
     created: data?.created ?? null,
     model: data?.model || requestedModel,
-    background: data?.background || requestedBackground,
     usage: data?.usage || null,
     images: items.map((item, index) => {
       const base64 = item?.b64_json || item?.base64 || item?.image?.b64_json || "";
@@ -1599,14 +1170,7 @@ async function consumeImageApiStream(res, options = {}) {
       partialImageEvents += 1;
       latestPartial = base64;
       if (previewPath) {
-        const previewSaved = saveBase64ImageToPath(latestPartial, previewPath);
-        if (options.background === "transparent") {
-          try {
-            finalizeTransparentSavedImage(previewSaved, options.background);
-          } catch {
-            // A partial image may not contain the final uniform key background yet.
-          }
-        }
+        saveBase64ImageToPath(latestPartial, previewPath);
         console.log(`[stream] 实时预览 ${partialImageEvents}: ${previewPath}`);
       } else {
         console.log(`[stream] 图片进度 ${partialImageEvents}`);
@@ -1647,11 +1211,10 @@ async function consumeImageApiStream(res, options = {}) {
   };
 }
 
-function imageStreamLogSummary(result, size, model = DEFAULT_MODEL, background = "auto") {
+function imageStreamLogSummary(result, size, model = DEFAULT_MODEL) {
   return {
     transport: "images-stream",
     model,
-    background,
     size,
     partialImageEvents: result.partialImageEvents || 0,
     eventCounts: result.eventCounts || {},
@@ -1673,17 +1236,14 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
         Accept: preview ? "text/event-stream, application/json" : "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(buildImagesGenerationBody(model, prompt, size, { preview, background: options.background })),
+      body: JSON.stringify(buildImagesGenerationBody(model, prompt, size, { preview })),
     }, REQUEST_TIMEOUT_MS);
     if (!res.ok) return { ok: false, elapsed: Date.now() - start, error: await parseErrorResponse(res) };
 
     const streamed = preview ? await consumeImageApiStream(res, options) : null;
     const data = preview ? null : await res.json();
     const base64 = preview ? streamed?.base64 : await imageApiResultBase64(data);
-    const saved = finalizeTransparentSavedImage(
-      saveBase64Image(base64, outputDir, "img", null, resize ? size : null),
-      options.background,
-    );
+    const saved = saveBase64Image(base64, outputDir, "img", null, resize ? size : null);
     const elapsed = Date.now() - start;
     if (!saved) {
       return {
@@ -1695,9 +1255,9 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
       };
     }
     if (options.rawLogPath && streamed) {
-      saveTextArtifact(options.rawLogPath, JSON.stringify(imageStreamLogSummary(streamed, size, model, options.background || "auto"), null, 2));
+      saveTextArtifact(options.rawLogPath, JSON.stringify(imageStreamLogSummary(streamed, size, model), null, 2));
     }
-    return { ok: true, elapsed, model, resolution: modelResolution(model), background: options.background || "auto", transport: preview ? "images-stream" : "images", ...saved, previewPath: streamed?.previewPath || null };
+    return { ok: true, elapsed, model, resolution: modelResolution(model), transport: preview ? "images-stream" : "images", ...saved, previewPath: streamed?.previewPath || null };
   } catch (error) {
     return {
       ok: false,
@@ -1764,7 +1324,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
         Accept: "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: buildImagesEditForm(model, prompt, size, sources, { background: options.background }),
+      body: buildImagesEditForm(model, prompt, size, sources),
     }, REQUEST_TIMEOUT_MS);
     if (!res.ok) {
       const raw = await res.text().catch(() => "");
@@ -1773,14 +1333,14 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
     }
 
     const data = await res.json();
-    if (rawLogPath) saveTextArtifact(rawLogPath, JSON.stringify(imageApiLogSummary(data, model, options.background || "auto"), null, 2));
+    if (rawLogPath) saveTextArtifact(rawLogPath, JSON.stringify(imageApiLogSummary(data, model), null, 2));
     const base64 = await imageApiResultBase64(data);
-    const saved = finalizeTransparentSavedImage(options.savePath
+    const saved = options.savePath
       ? saveBase64ImageToPath(base64, options.savePath, resize ? size : null)
-      : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, resize ? size : null), options.background);
+      : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, resize ? size : null);
     const elapsed = Date.now() - start;
     if (!saved) return { ok: false, elapsed, error: "Images API response did not contain an edited image", sourceName };
-    return { ok: true, elapsed, model, resolution: modelResolution(model), background: options.background || "auto", ...saved, sourceName };
+    return { ok: true, elapsed, model, resolution: modelResolution(model), ...saved, sourceName };
   } catch (error) {
     return {
       ok: false,
@@ -2249,7 +1809,6 @@ async function editImage(workers, imagePaths, prompt, size, outputDir, count = 1
     },
     runTask: async (worker, task) => editImageOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
       model: options.model,
-      background: options.background,
       resize,
       saveIndex: task.saveIndex,
       transport: options.transport,
@@ -2287,7 +1846,6 @@ async function runBatch(workers, prompts, size, concurrency, outputDir, options 
     preview = false,
     returnReport = false,
     model = DEFAULT_MODEL,
-    background = null,
   } = options;
 
   const tasks = prompts.map((prompt, index) => ({
@@ -2309,7 +1867,6 @@ async function runBatch(workers, prompts, size, concurrency, outputDir, options 
     },
     runTask: async (worker, task) => generateImage(worker.apiKey, task.prompt, size, outputDir, {
       model,
-      background,
       resize,
       transport,
       preview: preview && prompts.length === 1,
@@ -2383,7 +1940,6 @@ async function runBatchEdit(workers, imagePaths, prompt, size, concurrency, outp
     },
     runTask: async (worker, task) => editImageOnce(worker.apiKey, task.sources, prompt, size, outputDir, {
       model: options.model,
-      background: options.background,
       resize,
       transport: options.transport,
     }),
@@ -2481,11 +2037,6 @@ function buildNailStressRecords(tasks, resultsOrReport) {
       width: result?.width || null,
       height: result?.height || null,
       dimensions: result?.dimensions || null,
-      transparent: !!result?.transparent,
-      alphaMode: result?.alphaMode || null,
-      keyColor: result?.keyColor || null,
-      transparentPixels: result?.transparentPixels ?? null,
-      partialAlphaPixels: result?.partialAlphaPixels ?? null,
       resized: !!result?.resized,
       originalDimensions: result?.originalDimensions || null,
       error: status === "failed" ? (result?.error || "Unknown error") : null,
@@ -2555,13 +2106,10 @@ function writeNailStressArtifacts(outputRoot, records, report, metadata, options
   return { manifestPath, summaryCsvPath, failuresPath };
 }
 
-function printNailStressDryRun(personaPath, productDir, limit, size, outputRoot, selection, tasks, concurrency, model, background = null, routing = {}) {
+function printNailStressDryRun(personaPath, productDir, limit, size, outputRoot, selection, tasks, concurrency, model) {
   console.log("Nail stress test dry run");
   console.log(`Endpoint: ${IMAGES_EDITS_URL}`);
   console.log(`Model: ${model} (${modelResolution(model)})`);
-  console.log(`Requested model: ${routing.requestedModel || model}`);
-  console.log(`Auto switched: ${routing.autoSwitched ? "yes" : "no"}${routing.routingReasons?.length ? ` (${routing.routingReasons.join(", ")})` : ""}`);
-  console.log(`Background: ${background || "auto"}`);
   console.log("Authorization: Bearer <redacted>");
   console.log("Reference image content: <binary omitted>");
   console.log(`Persona: ${personaPath}`);
@@ -2572,7 +2120,7 @@ function printNailStressDryRun(personaPath, productDir, limit, size, outputRoot,
   console.log(`Concurrency: ${concurrency}`);
   console.log(`Output root: ${outputRoot}`);
   console.log(`Total tasks: ${tasks.length}`);
-  console.log(`Sanitized request: ${JSON.stringify({ model, size, n: 1, ...(background ? { background } : {}), ...(background === "transparent" ? { output_format: "png" } : {}), prompt: "<task prompt>", "image[]": ["<persona binary omitted>", "<product binary omitted>"] })}`);
+  console.log(`Sanitized request: ${JSON.stringify({ model, size, n: 1, prompt: "<task prompt>", "image[]": ["<persona binary omitted>", "<product binary omitted>"] })}`);
   console.log("First products:");
   for (const product of selection.products.slice(0, Math.min(5, limit))) {
     console.log(`- ${String(product.productIndex).padStart(3, "0")} ${product.name}`);
@@ -2758,11 +2306,6 @@ function buildWorkflowRecords(tasks, resultsOrReport) {
       width: result.width || null,
       height: result.height || null,
       dimensions: result.dimensions || null,
-      transparent: !!result.transparent,
-      alphaMode: result.alphaMode || null,
-      keyColor: result.keyColor || null,
-      transparentPixels: result.transparentPixels ?? null,
-      partialAlphaPixels: result.partialAlphaPixels ?? null,
       resized: !!result.resized,
       originalDimensions: result.originalDimensions || null,
       error: result.error || null,
@@ -2922,7 +2465,6 @@ async function runWorkflowQueuePass(workers, queuedTasks, passOptions) {
     repair = false,
     transport = "images",
     model = DEFAULT_MODEL,
-    background = null,
   } = passOptions;
   if (queuedTasks.length === 0) return noOpQueueReport(workers, outputRoot);
   const startedAt = new Date().toISOString();
@@ -2954,7 +2496,6 @@ async function runWorkflowQueuePass(workers, queuedTasks, passOptions) {
       }
       return editImageOnce(worker.apiKey, [...fixedSources, item], task.prompt, size, task.outputDir, {
         model,
-        background,
         resize,
         savePath: task.outputPath,
         rawLogPath: `${task.rawLogBasePath}.${repair ? "repair" : "main"}.attempt${context.attempt}.json`,
@@ -2985,13 +2526,10 @@ function workflowMissingQueue(tasks, liveResults) {
   return queued;
 }
 
-function printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, selection, templates, tasks, concurrency, model, background = null, routing = {}) {
+function printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, selection, templates, tasks, concurrency, model) {
   console.log("Workflow batch edit dry run");
   console.log(`Endpoint: ${IMAGES_EDITS_URL}`);
   console.log(`Model: ${model} (${modelResolution(model)})`);
-  console.log(`Requested model: ${routing.requestedModel || model}`);
-  console.log(`Auto switched: ${routing.autoSwitched ? "yes" : "no"}${routing.routingReasons?.length ? ` (${routing.routingReasons.join(", ")})` : ""}`);
-  console.log(`Background: ${background || "auto"}`);
   console.log("Authorization: Bearer <redacted>");
   console.log("Reference image content: <binary omitted>");
   console.log(`Fixed refs: ${fixedRefPaths.length}`);
@@ -3001,7 +2539,7 @@ function printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, se
   console.log(`Selected items: ${selection.items.length}`);
   console.log(`Templates: ${templates.length}`);
   console.log(`Total tasks: ${tasks.length}`);
-  console.log(`Sanitized request: ${JSON.stringify({ model, size, n: 1, ...(background ? { background } : {}), ...(background === "transparent" ? { output_format: "png" } : {}), prompt: "<template prompt>", "image[]": [...fixedRefPaths.map(() => "<fixed reference binary omitted>"), "<item binary omitted>"] })}`);
+  console.log(`Sanitized request: ${JSON.stringify({ model, size, n: 1, prompt: "<template prompt>", "image[]": [...fixedRefPaths.map(() => "<fixed reference binary omitted>"), "<item binary omitted>"] })}`);
   console.log(`Aspect/size: ${size}`);
   console.log(`Concurrency: ${concurrency}`);
   console.log(`Output root: ${outputRoot}`);
@@ -3033,10 +2571,6 @@ async function runWorkflowBatchEdit(workers, options) {
     repairPasses = WORKFLOW_DEFAULT_REPAIR_PASSES,
     transport = "images",
     model = DEFAULT_MODEL,
-    requestedModel = model,
-    autoSwitched = false,
-    routingReasons = [],
-    background = null,
   } = options;
 
   const fixedGroup = loadSourceImages(fixedRefPaths);
@@ -3062,18 +2596,10 @@ async function runWorkflowBatchEdit(workers, options) {
     transport,
     model,
     resolution: modelResolution(model),
-    requestedModel,
-    autoSwitched,
-    routingReasons,
-    background: background || "auto",
-    requestedModel,
-    autoSwitched,
-    routingReasons,
-    background: background || "auto",
   };
 
   if (dryRun) {
-    printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, selection, workflowTemplates, tasks, concurrency, model, background, { requestedModel, autoSwitched, routingReasons });
+    printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, selection, workflowTemplates, tasks, concurrency, model);
     return { ok: true, dryRun: true, outputRoot, selection, templates: workflowTemplates, tasks };
   }
 
@@ -3109,7 +2635,6 @@ async function runWorkflowBatchEdit(workers, options) {
     sessions,
     transport,
     model,
-    background,
   });
   reports.push(mainReport);
 
@@ -3132,7 +2657,6 @@ async function runWorkflowBatchEdit(workers, options) {
       repair: true,
       transport,
       model,
-      background,
     });
     reports.push(repairReport);
   }
@@ -3267,10 +2791,6 @@ async function runNailStressTest(workers, options) {
     resumeExisting = true,
     transport = "images",
     model = DEFAULT_MODEL,
-    requestedModel = model,
-    autoSwitched = false,
-    routingReasons = [],
-    background = null,
   } = options;
 
   const persona = loadSourceImage(personaPath);
@@ -3292,14 +2812,10 @@ async function runNailStressTest(workers, options) {
     transport,
     model,
     resolution: modelResolution(model),
-    requestedModel,
-    autoSwitched,
-    routingReasons,
-    background: background || "auto",
   };
 
   if (dryRun) {
-    printNailStressDryRun(personaPath, productDir, limit, size, outputRoot, selection, tasks, concurrency, model, background, { requestedModel, autoSwitched, routingReasons });
+    printNailStressDryRun(personaPath, productDir, limit, size, outputRoot, selection, tasks, concurrency, model);
     return {
       ok: true,
       dryRun: true,
@@ -3388,7 +2904,6 @@ async function runNailStressTest(workers, options) {
       }
       return editImageOnce(worker.apiKey, [persona, product], task.prompt, size, task.outputDir, {
         model,
-        background,
         resize,
         savePath: task.outputPath,
         rawLogPath: `${task.rawLogBasePath}.attempt${context.attempt}.json`,
@@ -3583,9 +3098,8 @@ async function runImagesApiSelfTest() {
   ];
   const payloads = MODEL_INFO.map(({ id }) => {
     const size = resolveSize(id, "16:9");
-    const background = id === ADOBE_MODEL ? "transparent" : null;
-    const generation = buildImagesGenerationBody(id, "mock generation prompt", size, { background });
-    const form = buildImagesEditForm(id, "mock edit prompt", size, sources, { background });
+    const generation = buildImagesGenerationBody(id, "mock generation prompt", size);
+    const form = buildImagesEditForm(id, "mock edit prompt", size, sources);
     const imageEntries = [...form.entries()].filter(([key]) => key === "image[]");
     return {
       id,
@@ -3594,12 +3108,10 @@ async function runImagesApiSelfTest() {
         && generation.n === 1
         && generation.size === size
         && generation.prompt.includes("mock generation prompt")
-        && (id !== ADOBE_MODEL || (generation.background === "transparent" && generation.output_format === "png"))
         && form.get("model") === id
         && form.get("size") === size
         && form.get("n") === "1"
         && String(form.get("prompt")).includes("mock edit prompt")
-        && (id !== ADOBE_MODEL || (form.get("background") === "transparent" && form.get("output_format") === "png"))
         && imageEntries.length === 2
         && imageEntries.every(([, value]) => value instanceof Blob),
     };
@@ -3608,7 +3120,7 @@ async function runImagesApiSelfTest() {
 
   const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const [base64] = extractImagesFromImageApi({ data: [{ b64_json: pngB64 }] });
-  const logSummary = imageApiLogSummary({ data: [{ b64_json: pngB64, url: "https://signed.example/image.png" }] }, "gpt-image-2-adobe");
+  const logSummary = imageApiLogSummary({ data: [{ b64_json: pngB64, url: "https://signed.example/image.png" }] }, "gpt-image-2-4k");
   const logText = JSON.stringify(logSummary);
   const outputDir = resolveOutputDir(join(tmpdir(), "88api-image-gen-self-test"));
   const saved = saveBase64Image(base64, outputDir, "self_test_edit");
@@ -3688,66 +3200,6 @@ async function runImageStreamSelfTest() {
   return 0;
 }
 
-async function runTransparentPngSelfTest() {
-  console.log("Transparent PNG self-test: key prompt, PNG decode, chroma-key removal, RGBA encode, and opaque-result rejection.");
-  const width = 5;
-  const height = 5;
-  const sourcePixels = Buffer.alloc(width * height * 4);
-  for (let index = 0; index < width * height; index += 1) {
-    const offset = index * 4;
-    sourcePixels[offset] = 0;
-    sourcePixels[offset + 1] = 255;
-    sourcePixels[offset + 2] = 0;
-    sourcePixels[offset + 3] = 255;
-  }
-  const centerOffset = (2 * width + 2) * 4;
-  sourcePixels[centerOffset] = 220;
-  sourcePixels[centerOffset + 1] = 30;
-  sourcePixels[centerOffset + 2] = 20;
-  const source = encodeRgbaPng(width, height, sourcePixels);
-  const converted = makeTransparentPngBuffer(source);
-  const decoded = decodePng8(converted.buffer);
-  const rgba = rgbaPixelsFromDecodedPng(decoded);
-  const requestBody = buildImagesGenerationBody(ADOBE_MODEL, "isolated product", "2880x2880", { background: "transparent" });
-  let opaqueRejected = false;
-  try {
-    const opaqueBlue = Buffer.alloc(width * height * 4);
-    for (let offset = 0; offset < opaqueBlue.length; offset += 4) {
-      opaqueBlue[offset] = 20;
-      opaqueBlue[offset + 1] = 40;
-      opaqueBlue[offset + 2] = 220;
-      opaqueBlue[offset + 3] = 255;
-    }
-    makeTransparentPngBuffer(encodeRgbaPng(width, height, opaqueBlue));
-  } catch (error) {
-    opaqueRejected = String(error?.message || error).includes("found no green or magenta key background");
-  }
-  const ok = decoded.colorType === 6
-    && rgba[3] === 0
-    && rgba[centerOffset + 3] === 255
-    && converted.keyColor === "#00FF00"
-    && converted.transparentPixels === width * height - 1
-    && requestBody.output_format === "png"
-    && requestBody.prompt.includes("#00FF00")
-    && requestBody.prompt.includes("#FF00FF")
-    && requestBody.prompt.includes("不要直接模拟透明棋盘格")
-    && opaqueRejected;
-  if (!ok) {
-    console.error("Transparent PNG self-test FAILED.");
-    console.error(JSON.stringify({
-      colorType: decoded.colorType,
-      cornerAlpha: rgba[3],
-      centerAlpha: rgba[centerOffset + 3],
-      converted,
-      opaqueRejected,
-      requestPrompt: requestBody.prompt,
-    }, null, 2));
-    return 1;
-  }
-  console.log("Transparent PNG self-test OK.");
-  return 0;
-}
-
 async function runModelConfigSelfTest() {
   console.log("Model/config self-test: catalog, migration, precedence, sizes, atomic save, and dry-run redaction.");
   const configPath = join(tmpdir(), `88api-image-gen-config-self-test-${process.pid}-${Date.now()}.json`);
@@ -3763,22 +3215,21 @@ async function runModelConfigSelfTest() {
   writeFileSync(configPath, JSON.stringify(legacy, null, 2), "utf8");
   const migrated = loadConfig(configPath);
   const migratedDefaultModel = migrated.model;
-  migrated.model = "gpt-image-2-adobe";
+  migrated.model = "gpt-image-2-4k";
   saveConfig(migrated, configPath);
   const persisted = loadConfig(configPath);
+  const removedModelFallback = normalizeConfigShape({ ...legacy, model: "removed-image-model" }).config.model;
   const selectedWorker = getPrimaryWorker(persisted, { requireEnabled: true });
   const configSummary = buildConfigSummary(persisted);
   const replacedConfig = replaceWithSingleKey(persisted, "sk-test-replacement");
-  const transparentRouting = resolveGenerationParams({ model: "gpt-image-2", transparent: true, aspect: "16:9" }, {}, {});
-  const specialRatioRouting = resolveGenerationParams({ model: "gpt-image-2-4k", aspect: "21:9" }, {}, {});
-  const customSizeRouting = resolveGenerationParams({ size: "3000x777" }, {}, {});
+  const presetChecks = MODEL_INFO.flatMap(({ id }) => SUPPORTED_RATIOS.map((ratio) => {
+    const size = resolveSize(id, ratio);
+    return { model: id, ratio, size, error: imageSizeValidationError(size) };
+  }));
+  const presetSizesOk = presetChecks.every((item) => item.size && item.error === null);
   const dryRun = buildDryRunPlan({
     mode: "generation",
-    requestedModel: transparentRouting.requestedModel,
-    model: transparentRouting.model,
-    autoSwitched: transparentRouting.autoSwitched,
-    routingReasons: transparentRouting.routingReasons,
-    background: transparentRouting.background,
+    model: "gpt-image-2-4k",
     size: "3840x2160",
     aspect: "16:9",
     prompts: ["mock prompt"],
@@ -3793,11 +3244,19 @@ async function runModelConfigSelfTest() {
   } catch {
     invalidRejected = true;
   }
-  const ok = MODEL_INFO.length === 3
+  let removedModelRejected = false;
+  try {
+    validateModel("removed-image-model");
+  } catch {
+    removedModelRejected = true;
+  }
+  const ok = MODEL_INFO.length === 2
+    && presetSizesOk
     && migratedDefaultModel === DEFAULT_MODEL
+    && removedModelFallback === DEFAULT_MODEL
     && migrated.workers.length === 3
     && migrated.workers[0].enabled === false
-    && persisted.model === "gpt-image-2-adobe"
+    && persisted.model === "gpt-image-2-4k"
     && persisted.workers[0].apiKey === legacy.workers[0].apiKey
     && selectedWorker?.apiKey === legacy.workers[1].apiKey
     && configSummary.已配置Key === true
@@ -3807,32 +3266,25 @@ async function runModelConfigSelfTest() {
     && replacedConfig.workers.length === 1
     && replacedConfig.workers[0].apiKey === "sk-test-replacement"
     && effectiveModel({ model: "gpt-image-2-4k" }, persisted) === "gpt-image-2-4k"
-    && effectiveModel({}, persisted) === "gpt-image-2-adobe"
+    && effectiveModel({}, persisted) === "gpt-image-2-4k"
     && effectiveModel({}, {}) === DEFAULT_MODEL
     && resolveSize("gpt-image-2", "16:9") === "2048x1152"
     && resolveSize("gpt-image-2-4k", "16:9") === "3840x2160"
-    && resolveSize("gpt-image-2-adobe", "16:9") === "3840x2160"
-    && transparentRouting.model === ADOBE_MODEL
-    && transparentRouting.autoSwitched === true
-    && transparentRouting.background === "transparent"
-    && specialRatioRouting.model === ADOBE_MODEL
-    && specialRatioRouting.autoSwitched === true
-    && specialRatioRouting.size === "3808x1632"
-    && customSizeRouting.model === ADOBE_MODEL
-    && customSizeRouting.size === "3000x777"
-    && customSizeRouting.explicitSize === true
+    && resolveSize("gpt-image-2-4k", "4:3") === "3264x2448"
+    && resolveSize("gpt-image-2-4k", "21:9") === null
     && invalidRejected
+    && removedModelRejected
     && dryRun.paidApiCalled === false
-    && dryRun.request.body.model === ADOBE_MODEL
-    && dryRun.request.body.background === "transparent"
-    && dryRun.request.body.output_format === "png"
+    && dryRun.request.body.model === "gpt-image-2-4k"
+    && !("background" in dryRun.request.body)
+    && !("output_format" in dryRun.request.body)
     && dryRun.taskCount === 2
     && legacy.workers.every((worker) => !dryText.includes(worker.apiKey))
     && !dryText.includes("base64");
   if (existsSync(configPath)) unlinkSync(configPath);
   if (!ok) {
     console.error("Model/config self-test FAILED.");
-    console.error(JSON.stringify({ migrated, persisted, selectedWorker, configSummary, replacedConfig, dryRun, invalidRejected }, null, 2));
+    console.error(JSON.stringify({ migrated, persisted, removedModelFallback, selectedWorker, configSummary, replacedConfig, presetChecks, presetSizesOk, dryRun, invalidRejected, removedModelRejected }, null, 2));
     return 1;
   }
   console.log("Model/config self-test OK.");
@@ -3844,7 +3296,6 @@ async function runUnifiedSelfTest() {
     ["adaptive", runAdaptiveSelfTest],
     ["images-api", runImagesApiSelfTest],
     ["image-stream", runImageStreamSelfTest],
-    ["transparent-png", runTransparentPngSelfTest],
     ["workflow", runWorkflowSelfTest],
     ["model-config", runModelConfigSelfTest],
   ];
@@ -3884,9 +3335,6 @@ function parseArgs(argv) {
     else if (value === "--quality" && argv[i + 1]) args.flags.quality = argv[++i];
     else if (value === "--ratio" && argv[i + 1]) args.flags.ratio = argv[++i];
     else if (value === "--aspect" && argv[i + 1]) args.flags.aspect = argv[++i];
-    else if (value === "--size" && argv[i + 1]) args.flags.size = argv[++i];
-    else if (value === "--background" && argv[i + 1]) args.flags.background = argv[++i];
-    else if (value === "--transparent") args.flags.transparent = true;
     else if (value === "--count" && argv[i + 1]) args.flags.count = Number.parseInt(argv[++i], 10);
     else if (value === "--repeat" && argv[i + 1]) args.flags.repeat = Number.parseInt(argv[++i], 10);
     else if (value === "--limit" && argv[i + 1]) args.flags.limit = Number.parseInt(argv[++i], 10);
@@ -3944,10 +3392,10 @@ function parseArgs(argv) {
     else if (value === "--self-test-workers") args.flags.selfTestAdaptive = true;
     else if (value === "--self-test-images-api") args.flags.selfTestImagesApi = true;
     else if (value === "--self-test-image-stream" || value === "--self-test-responses" || value === "--self-test-edit-responses") args.flags.selfTestImageStream = true;
-    else if (value === "--self-test-transparent") args.flags.selfTestTransparent = true;
     else if (value === "--self-test-workflow") args.flags.selfTestWorkflow = true;
     else if (value === "--self-test") args.flags.selfTest = true;
     else if (value === "--help" || value === "-h") args.flags.help = true;
+    else if (value.startsWith("--")) args.flags.unknownOption = value;
     i++;
   }
   return args;
@@ -3971,13 +3419,13 @@ FIRST USE
   one Key is sufficient; 88API automatically allocates concurrent requests upstream
 
 GENERATE
-  --prompt "..." [--model MODEL] [--ratio R|--aspect R] [--size WxH] [--background auto|opaque|transparent|--transparent] [--count 1..${MAX_GENERATION_COUNT}] [--transport auto|images] [--preview|--no-preview] [--no-resize] [--dry-run]
+  --prompt "..." [--model MODEL] [--ratio R|--aspect R] [--count 1..${MAX_GENERATION_COUNT}] [--transport auto|images] [--preview|--no-preview] [--no-resize] [--dry-run]
   --prompt "..." --repeat 1..${MAX_REPEAT} [--concurrency 1..${MAX_CONCURRENCY}] [--adaptive|--no-adaptive]
   --batch prompts.json [--ratio R|--aspect R] [--concurrency N] [--no-resize]
   --batch-inline "prompt 1" "prompt 2" ... [--ratio R|--aspect R] [--concurrency N] [--no-resize]
 
 EDIT
-  --edit --image path.png --prompt "..." [--ratio R|--aspect R] [--size WxH] [--background auto|opaque|transparent|--transparent] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N] [--transport auto|images]
+  --edit --image path.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N] [--transport auto|images]
   --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N]    combine all sources in one edit request
   --batch-edit --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--concurrency N]
   all edits use Images API multipart image[] uploads
@@ -4004,7 +3452,6 @@ TOOLS
   --self-test-workers
   --self-test-images-api
   --self-test-image-stream
-  --self-test-transparent
   --self-test-workflow
 
 DEFAULTS
@@ -4014,8 +3461,7 @@ DEFAULTS
   factory model: ${DEFAULT_MODEL}
   models: ${[...MODELS].join(", ")}
   API mode: OpenAI Images API only; no GPT text model required
-  resolution: gpt-image-2=2K; gpt-image-2-4k/gpt-image-2-adobe=4K
-  capability routing: transparent backgrounds, explicit custom sizes, and non-native ratios automatically use ${ADOBE_MODEL} for that request only
+  resolution: gpt-image-2=2K; gpt-image-2-4k=4K
   output: ~/Pictures/88api-image-gen
   scheduler: one configured Key with up to ${MAX_CONCURRENCY} local request slots; upstream allocation uses the auto group
   adaptive: on, concurrency ${DEFAULTS.concurrency}, retries ${MAX_RETRIES}, key cooldown ${DEFAULT_WORKER_COOLDOWN_MS / 1000}s
@@ -4024,79 +3470,61 @@ DEFAULTS
   nail stress test: compatibility preset for ${WORKFLOW_NAIL_PRESET}; do not assume product type in generic workflow
 
 RATIOS
-  native Image2 ratios: ${supportedRatioText()}
+  supported ratios: ${supportedRatioText()}
   aliases: square=1:1, landscape=4:3, portrait=3:4
-  other valid W:H ratios (for example 21:9) automatically route to ${ADOBE_MODEL}
+  unsupported ratios are rejected before any paid request
 
 SIZE MATRIX
   2K: 1:1 2048x2048, 3:2 2048x1360, 2:3 1360x2048, 4:3 2048x1536, 3:4 1536x2048, 16:9 2048x1152, 9:16 1152x2048, 2:1 2048x1024, 1:2 1024x2048, 7:4 2208x1264, 4:7 1264x2208
-  4K: 1:1 2880x2880, 3:2 3520x2352, 2:3 2352x3520, 4:3 3840x2880, 3:4 2880x3840, 16:9 3840x2160, 9:16 2160x3840, 2:1 3840x1920, 1:2 1920x3840, 7:4 3808x2176, 4:7 2176x3808
-  --size WxH is an Adobe-only custom-size capability and automatically routes to ${ADOBE_MODEL}.`);
+  4K: 1:1 2880x2880, 3:2 3520x2352, 2:3 2352x3520, 4:3 3264x2448, 3:4 2448x3264, 16:9 3840x2160, 9:16 2160x3840, 2:1 3840x1920, 1:2 1920x3840, 7:4 3808x2176, 4:7 2176x3808`);
 }
 
 function resolveGenerationParams(flags, modeConfig, config = {}) {
-  const customSize = flags.size ? validateCustomSize(flags.size) : null;
-  if (flags.size && !customSize) {
-    console.error(`ERROR: Invalid custom size="${flags.size}". Use WIDTHxHEIGHT with positive integers, each edge <= ${MAX_CUSTOM_EDGE}, and total pixels <= ${MAX_CUSTOM_PIXELS}. Custom sizes route to ${ADOBE_MODEL}.`);
-    process.exit(1);
-  }
-
   const explicitRatio = flags.aspect ?? flags.ratio ?? null;
-  const requestedRatio = explicitRatio ?? customSize?.aspect ?? modeConfig?.ratio ?? DEFAULTS.ratio;
+  const requestedRatio = explicitRatio ?? modeConfig?.ratio ?? DEFAULTS.ratio;
   const ratioParts = parseRatioParts(requestedRatio);
   if (!ratioParts) {
-    console.error(`ERROR: Invalid ratio="${requestedRatio}". Use W:H, for example 16:9 or 21:9.`);
+    console.error(`ERROR: Invalid ratio="${requestedRatio}". Supported ratios: ${supportedRatioText()}.`);
     process.exit(1);
   }
-  const ratio = normalizeRatio(requestedRatio);
-  if (customSize && explicitRatio) {
-    const customParts = parseRatioParts(customSize.aspect);
-    if (!customParts || customParts.left !== ratioParts.left || customParts.right !== ratioParts.right) {
-      console.error(`ERROR: --size ${customSize.value} has aspect ${customSize.aspect}, which conflicts with --aspect/--ratio ${explicitRatio}.`);
-      process.exit(1);
-    }
-  }
-
-  let routing;
-  try {
-    routing = resolveCapabilityModel(flags, config, ratio);
-  } catch (error) {
-    console.error(`ERROR: ${error?.message || String(error)}`);
+  const ratio = `${ratioParts.left}:${ratioParts.right}`;
+  if (!isSupportedRatio(ratio)) {
+    console.error(`ERROR: Unsupported ratio="${requestedRatio}". Supported ratios: ${supportedRatioText()}.`);
     process.exit(1);
   }
-  const { requestedModel, model, background, autoSwitched, routingReasons } = routing;
-  if (autoSwitched) {
-    console.warn(`NOTICE: ${requestedModel} cannot satisfy ${routingReasons.join(", ")}; using ${model} for this request only. The saved default is unchanged.`);
-  }
+  const model = effectiveModel(flags, config);
   const requestedQuality = flags.quality || null;
   const quality = normalizeQuality(requestedQuality, model);
   if (requestedQuality && shouldWarnFixedQuality(requestedQuality, model)) {
     console.warn(`NOTICE: ${model} uses the fixed ${quality} matrix; ignoring requested quality="${requestedQuality}". ${API_SIZE_LIMIT_NOTICE}`);
   }
 
-  const size = customSize?.value || resolveSize(model, ratio);
+  const size = resolveSize(model, ratio);
   if (!size) {
-    console.error(`ERROR: Unable to resolve ratio="${requestedRatio}" for model ${model}. Native Image2 ratios: ${supportedRatioText()}; other valid ratios route to ${ADOBE_MODEL}.`);
+    console.error(`ERROR: Unable to resolve ratio="${requestedRatio}" for model ${model}. Supported ratios: ${supportedRatioText()}.`);
+    process.exit(1);
+  }
+  const sizeError = imageSizeValidationError(size);
+  if (sizeError) {
+    console.error(`ERROR: Invalid ${model} preset: ${sizeError} No paid request was made.`);
     process.exit(1);
   }
   return {
-    requestedModel,
     model,
-    autoSwitched,
-    routingReasons,
-    background,
     quality,
     resolution: quality,
-    sizeMode: customSize ? "custom" : (isNativeImage2Ratio(ratio) ? quality : "Adobe custom aspect"),
+    sizeMode: quality,
     ratio,
     size,
-    explicitSize: !!customSize,
-    requestedSize: flags.size || null,
   };
 }
 
 async function main() {
   const { prompts, flags } = parseArgs(process.argv.slice(2));
+  if (flags.unknownOption) {
+    console.error(`ERROR: Unsupported option "${flags.unknownOption}". Run --help for the v${PLUGIN_VERSION} command list.`);
+    process.exit(1);
+  }
   const config = loadConfig();
   try {
     if (flags.model) validateModel(flags.model);
@@ -4155,10 +3583,6 @@ async function main() {
   }
 
   if (flags.setQuickMode) {
-    if (flags.size || flags.background || flags.transparent) {
-      console.error("ERROR: --set-quick-mode does not persist --size/--background/--transparent. Use those capability flags on the generation command.");
-      process.exit(1);
-    }
     const previous = config.quickMode || {};
     const resolved = resolveGenerationParams(flags, previous, config);
     const { model, quality, ratio, size } = resolved;
@@ -4170,10 +3594,6 @@ async function main() {
   }
 
   if (flags.setBatchMode) {
-    if (flags.size || flags.background || flags.transparent) {
-      console.error("ERROR: --set-batch-mode does not persist --size/--background/--transparent. Use those capability flags on the batch command.");
-      process.exit(1);
-    }
     const previous = config.batchMode || {};
     const resolved = resolveGenerationParams(flags, previous, config);
     const { model, quality, ratio, size } = resolved;
@@ -4202,11 +3622,6 @@ async function main() {
 
   if (flags.selfTestImageStream) {
     process.exitCode = await runImageStreamSelfTest();
-    return;
-  }
-
-  if (flags.selfTestTransparent) {
-    process.exitCode = await runTransparentPngSelfTest();
     return;
   }
 
@@ -4241,13 +3656,13 @@ async function main() {
     }
     const workflowAspect = flags.aspect ?? flags.ratio ?? "9:16";
     const workflowParams = resolveGenerationParams({ ...flags, aspect: workflowAspect }, { ratio: workflowAspect }, config);
-    const { requestedModel, model, autoSwitched, routingReasons, background, ratio, size } = workflowParams;
+    const { model, ratio, size } = workflowParams;
     const limitExplicit = flags.limit != null;
     const limit = clampInteger(flags.limit, 1, 1000, WORKFLOW_DEFAULT_LIMIT);
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const repairPasses = clampInteger(flags.repairPasses, 0, 5, WORKFLOW_DEFAULT_REPAIR_PASSES);
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (workflow batch); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport} (workflow batch); model: ${model} (${modelResolution(model)})`);
     const result = await runWorkflowBatchEdit(configuredWorkers, {
       fixedRefPaths: flags.fixedRefs || [],
       itemDir: flags.itemDir,
@@ -4265,10 +3680,6 @@ async function main() {
       repairPasses,
       transport,
       model,
-      requestedModel,
-      autoSwitched,
-      routingReasons,
-      background,
     });
     process.exitCode = result.report?.exitCode || 0;
     return;
@@ -4292,9 +3703,9 @@ async function main() {
     const limit = clampInteger(flags.limit, 1, 1000, NAIL_STRESS_DEFAULT_LIMIT);
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const nailParams = resolveGenerationParams({ ...flags, aspect: "9:16" }, { ratio: "9:16" }, config);
-    const { requestedModel, model, autoSwitched, routingReasons, background, size } = nailParams;
+    const { model, size } = nailParams;
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (batch preset); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport} (batch preset); model: ${model} (${modelResolution(model)})`);
     const result = await runNailStressTest(configuredWorkers, {
       personaPath: flags.personaPath,
       productDir: flags.productDir,
@@ -4307,10 +3718,6 @@ async function main() {
       dryRun: !!flags.dryRun,
       transport,
       model,
-      requestedModel,
-      autoSwitched,
-      routingReasons,
-      background,
     });
     process.exitCode = result.report?.exitCode || 0;
     return;
@@ -4337,18 +3744,17 @@ async function main() {
       process.exit(1);
     }
     const editParams = resolveGenerationParams(flags, config.quickMode, config);
-    const { requestedModel, model, autoSwitched, routingReasons, background, ratio, size } = editParams;
+    const { model, ratio, size } = editParams;
     if (images.length > 1 && flags.batchEdit) {
       const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
       const transport = resolveRunTransport(requestedTransport, true);
       if (flags.dryRun) {
-        printDryRunPlan({ mode: "batch-edit", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images.slice(0, 1), count: images.length, concurrency });
+        printDryRunPlan({ mode: "batch-edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images.slice(0, 1), count: images.length, concurrency });
         return;
       }
-      console.log(`Transport: ${transport} (batch edit); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+      console.log(`Transport: ${transport} (batch edit); model: ${model} (${modelResolution(model)})`);
       process.exitCode = await runBatchEdit(configuredWorkers, images, prompts[0], size, concurrency, outputDir, {
         model,
-        background,
         adaptive: flags.adaptive !== false,
         resize: flags.resize !== false,
         transport,
@@ -4361,10 +3767,10 @@ async function main() {
     const preview = false;
     if (flags.preview === true) console.warn("NOTICE: --preview is supported for text-to-image generation only; edits use /v1/images/edits.");
     if (flags.dryRun) {
-      printDryRunPlan({ mode: images.length > 1 ? "multi-reference-edit" : "edit", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images, count, concurrency, preview });
+      printDryRunPlan({ mode: images.length > 1 ? "multi-reference-edit" : "edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images, count, concurrency, preview });
       return;
     }
-    console.log(`Transport: ${transport}; model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport}; model: ${model} (${modelResolution(model)})`);
     const result = await editImage(configuredWorkers, images, prompts[0], size, outputDir, count, false, {
       adaptive: flags.adaptive !== false,
       concurrency,
@@ -4372,7 +3778,6 @@ async function main() {
       transport,
       preview,
       model,
-      background,
     });
     if (!result.ok) {
       if (result.results?.length > 0) {
@@ -4405,7 +3810,7 @@ async function main() {
   const isBatch = !!flags.batchFile || !!flags.batchInline;
   const modeConfig = isBatch ? config.batchMode : config.quickMode;
   const generationParams = resolveGenerationParams(flags, modeConfig, config);
-  const { requestedModel, model, autoSwitched, routingReasons, background, ratio, size } = generationParams;
+  const { model, ratio, size } = generationParams;
 
   if (flags.batchFile) {
     const raw = readFileSync(flags.batchFile, "utf8");
@@ -4422,13 +3827,12 @@ async function main() {
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
     const transport = resolveRunTransport(requestedTransport, true);
     if (flags.dryRun) {
-      printDryRunPlan({ mode: "batch", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts: batchPrompts.map(String), count: batchPrompts.length, concurrency });
+      printDryRunPlan({ mode: "batch", model, size, aspect: ratio, prompts: batchPrompts.map(String), count: batchPrompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
     process.exit(await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
       model,
-      background,
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
       transport,
@@ -4443,13 +3847,12 @@ async function main() {
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
     const transport = resolveRunTransport(requestedTransport, true);
     if (flags.dryRun) {
-      printDryRunPlan({ mode: "batch-inline", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts, count: prompts.length, concurrency });
+      printDryRunPlan({ mode: "batch-inline", model, size, aspect: ratio, prompts, count: prompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
     process.exit(await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
       model,
-      background,
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
       transport,
@@ -4464,13 +3867,12 @@ async function main() {
     const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
     const transport = resolveRunTransport(requestedTransport, true);
     if (flags.dryRun) {
-      printDryRunPlan({ mode: "repeat", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts: Array(total).fill(prompt), count: total, concurrency });
+      printDryRunPlan({ mode: "repeat", model, size, aspect: ratio, prompts: Array(total).fill(prompt), count: total, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+    console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${modelResolution(model)})`);
     process.exit(await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
       model,
-      background,
       adaptive: flags.adaptive !== false,
       isVariation: true,
       resize: flags.resize !== false,
@@ -4481,13 +3883,12 @@ async function main() {
   const transport = resolveRunTransport(requestedTransport, false);
   const preview = flags.preview === true;
   if (flags.dryRun) {
-    printDryRunPlan({ mode: "generation", requestedModel, model, autoSwitched, routingReasons, background, size, aspect: ratio, prompts: [prompt], count: 1, concurrency: 1, preview });
+    printDryRunPlan({ mode: "generation", model, size, aspect: ratio, prompts: [prompt], count: 1, concurrency: 1, preview });
     return;
   }
-  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${modelResolution(model)}); background: ${background || "auto"}`);
+  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${modelResolution(model)})`);
   process.exit(await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
     model,
-    background,
     adaptive: flags.adaptive !== false,
     resize: flags.resize !== false,
     transport,

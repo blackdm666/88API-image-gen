@@ -1,67 +1,36 @@
 # 88API-image-gen
 
-来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用生图插件。支持文生图、参考图编辑、多参考图、透明 PNG、批量任务和本地保存。
+来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用生图插件。通过 OpenAI Images API 支持文生图、参考图编辑、多参考图、SSE 预览、批量任务、workflow 和本地保存。
 
-| 模型 | 定位 | 适合场景 |
+| 模型 | 固定档位 | 适合场景 |
 | --- | --- | --- |
-| `gpt-image-2`（默认） | 2K | 日常生成和常规编辑 |
-| `gpt-image-2-4k` | 4K | 用户明确要求普通 4K |
-| `gpt-image-2-adobe` | 4K / 自定义 | 透明背景、21:9 等少见比例、自定义尺寸或明确要求 Adobe |
+| `gpt-image-2`（默认） | 2K | 日常生成、常规编辑和批量生产 |
+| `gpt-image-2-4k` | 4K | 用户明确要求 4K、高分辨率展示或印刷素材 |
 
-插件只需配置一个 88API Key。创建 Key 时选择 `auto`（自动分组），并发与渠道分配由 88API 上游完成。
+v2.0.0 只保留以上两个模型，不再提供透明背景、自定义像素尺寸、非支持比例自动路由或第三个模型。
 
-## 环境
+## 环境与 Key
 
 - Codex 插件功能
 - Node.js 18 或更高版本
-- 一个能调用上述模型的 88api.ai Key
+- 一个可调用上述模型的 88api.ai Key
 
-## 创建并配置 88API Key
-
-### 1. 创建 Key
-
-登录 [88api.ai](https://88api.ai/)，进入“API 密钥”，创建一个 Key。名称可以自定义，分组选择 `auto`；如需渠道失败后继续尝试，可开启“跨分组重试”。
+登录 [88api.ai](https://88api.ai/)，在“API 密钥”中创建一个 Key，并选择 `auto` 分组。插件只需保存一个 Key；并发请求由同一个 Key 建立本地请求槽，再由 88API 上游分配。
 
 ![创建 API Key](docs/assets/88api-create-image-key.png)
 
-### 2. 复制 Key
-
-复制创建好的完整 Key。
-
 ![复制 API Key](docs/assets/88api-copy-key.png)
 
-截图复用自 [88api-Nano-Banana](https://github.com/blackdm666/88api-Nano-Banana) 当前版本。
+配置命令：
 
-### 3. 让 Codex 自动安装并配置
-
-复制下面整段到一个新的 Codex 任务，并替换其中的 Key：
-
-```text
-请帮我安装并配置最新版 88API-image-gen 插件。
-
-插件仓库：
-https://github.com/blackdm666/88API-image-gen
-
-88API Key：
-<把完整 Key 粘贴在这里>
-
-要求：
-1. 从上述仓库安装或更新 88api-image-gen@88api-plugins，不要安装其他同名来源。
-2. 将 Key 保存到插件专用配置文件；不要完整显示 Key。
-3. 运行配置检查、模型列表、自测、dry-run 和插件状态检查；只做无付费验证。
-4. 简要告诉我安装版本、配置文件路径和验证结果，并提醒我新建任务后通过 @ 调用插件。
+```powershell
+node plugins/88api-image-gen/scripts/generate.mjs --set-key "<YOUR_88API_KEY>"
+node plugins/88api-image-gen/scripts/generate.mjs --get-config
+node plugins/88api-image-gen/scripts/generate.mjs --list-models
+node plugins/88api-image-gen/scripts/generate.mjs --self-test
 ```
 
-已经安装插件时，只需把下面的话和 Key 发给 Codex：
-
-```text
-请使用已安装的 88API-image-gen 保存下面这一个 Key，然后运行配置检查和无付费自测。不要调用付费生图接口，也不要完整显示 Key。
-
-88API Key：
-<把完整 Key 粘贴在这里>
-```
-
-Key 只应粘贴到自己的 Codex 任务，不要发布到 Issue、公开聊天、仓库或截图里。安装或升级完成后请新建任务，让插件重新加载。
+真实 Key 只应保存在自己的 Codex 配置中，不要发布到 Issue、公开聊天、仓库或截图里。
 
 ## 在 Codex 中使用
 
@@ -70,48 +39,52 @@ Key 只应粘贴到自己的 Codex 任务，不要发布到 Issue、公开聊天
 ```text
 @88API-image-gen 生成一张 16:9 的雨夜城市海报。
 @88API-image-gen 用 4K 生成一张产品主视觉。
-@88API-image-gen 生成透明背景 PNG，只保留产品主体。
-@88API-image-gen 生成一张 21:9 超宽屏主视觉。
-@88API-image-gen 生成一张精确 3000x777 像素的横幅。
 @88API-image-gen 使用我附加的人物图和产品图，生成一张 16:9 的 4K 展示图。
 @88API-image-gen 根据这个要求生成 3 张不同方案。
 ```
 
-普通用户不需要运行 PowerShell，也不需要了解 CLI 参数；Codex 会负责选择模型、调用脚本并显示保存结果。
+普通任务使用 `gpt-image-2`。用户明确要求 4K 时，单次使用 `gpt-image-2-4k`；只有用户明确要求改变长期默认模型时才执行 `--set-model`。
 
-## 功能说明
+## 支持的比例与尺寸
 
-- 用户只说“4K”时，单次使用 `gpt-image-2-4k`。
-- 透明背景、少见比例和自定义尺寸自动使用 `gpt-image-2-adobe`。
-- 编辑时可以附加多张参考图，插件会按顺序上传。
-- 一个 Key 可以执行多图、批量和 workflow；每张图片仍是独立请求，可能分别计费。
-- 需要批量处理时，可以先让 Codex 做 dry-run，核对模型、尺寸和任务数后再执行。
-- 只有明确说“以后默认使用某模型”时，才会修改长期默认。
+仅支持：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`16:9`、`9:16`、`2:1`、`1:2`、`7:4`、`4:7`。
 
-Image2 原生比例：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`16:9`、`9:16`、`2:1`、`1:2`、`7:4`、`4:7`。其他合法比例自动路由 Adobe；`21:9` 默认解析为 `3808x1632`。
+| 比例 | 2K | 4K |
+| --- | ---: | ---: |
+| 1:1 | 2048×2048 | 2880×2880 |
+| 3:2 | 2048×1360 | 3520×2352 |
+| 2:3 | 1360×2048 | 2352×3520 |
+| 4:3 | 2048×1536 | 3264×2448 |
+| 3:4 | 1536×2048 | 2448×3264 |
+| 16:9 | 2048×1152 | 3840×2160 |
+| 9:16 | 1152×2048 | 2160×3840 |
+| 2:1 | 2048×1024 | 3840×1920 |
+| 1:2 | 1024×2048 | 1920×3840 |
+| 7:4 | 2208×1264 | 3808×2176 |
+| 4:7 | 1264×2208 | 2176×3808 |
 
-`gpt-image-2` 的 16:9 为 `2048x1152`，两款 4K 模型为 `3840x2160`。自定义尺寸每边不超过 `16384`，总像素不超过 `67108864`。
+所有预设都会在付费请求前检查 16 像素对齐、最大边、宽高比和总像素范围。不支持的比例或旧参数会直接报错，不会调用付费 API。
 
 ## API 与安全
 
 - 文生图：`POST https://88api.ai/v1/images/generations`
 - 图片编辑：`POST https://88api.ai/v1/images/edits`
-- 协议始终是 OpenAI Images API，不使用 Chat Completions 或 `/v1/responses`。
-- 透明后处理只改变保存的图片，不改变 88API 请求端点或认证方式。
-- dry-run 和自测不会调用付费生图接口，也不会输出 Key 或参考图 Base64。
-- 请求已经受理或状态未知时会标记 `[NO-RETRY]`，插件不会自动重发或换模型。
-- 不宣称 Adobe 模型具有未经验证的版权、授权或商业安全保证。
+- 不使用 Chat Completions 或 `/v1/responses`
+- `--dry-run` 和 `--self-test` 不调用付费生图接口，也不输出 Key 或参考图 Base64
+- 单张文生图显式使用 `--preview` 时启用 Images API SSE；默认等待最终 JSON
+- 已受理或状态未知的请求标记为 `[NO-RETRY]`，不会自动重发或跨模型回退
 
 ## 常见问题
 
-- **没有 Key：**按上面的截图创建一个 `auto` 分组 Key，再把配置提示词发给 Codex。
-- **`@` 菜单没有插件：**让 Codex 更新并重新安装插件，然后新建任务。
-- **模型或 Adobe 路由不符合预期：**让 Codex 先做无付费检查，并汇报请求模型、实际模型和路由原因。
+- **没有 Key：**创建一个 `auto` 分组 Key，然后执行 `--set-key`。
+- **`@` 菜单没有插件：**更新或重新安装插件，然后新建任务。
+- **旧配置保存了已移除模型：**v2.0.0 读取配置时会自动回退到 `gpt-image-2`。
+- **比例不支持：**从上方 11 个比例中选择；插件不会自动改成其他比例。
 - **请求超时或出现 `[NO-RETRY]`：**先在 88API 使用日志确认状态，不要立即重新生成。
 
 ## 项目信息
 
-- 版本：`1.0.0`
+- 版本：`2.0.0`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件：`88api-image-gen@88api-plugins`
-- 更新说明：[docs/更新说明-v1.0.0.md](docs/更新说明-v1.0.0.md)
+- 更新说明：[docs/更新说明-v2.0.0.md](docs/更新说明-v2.0.0.md)

@@ -1,7 +1,7 @@
 {
   "name": "88api-image-gen",
-  "version": "1.0.0",
-  "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、4K、透明 PNG、自定义尺寸、SSE 与批量工作流。",
+  "version": "2.0.0",
+  "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、Image2 4K、SSE 与批量工作流。",
   "author": {
     "name": "88api.ai"
   },
@@ -10,8 +10,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "88API-image-gen",
-    "shortDescription": "默认 2K，自动路由 4K、透明 PNG 与自定义尺寸。",
-    "longDescription": "来源于 88api.ai Token 聚合站的 Codex 专用生图插件，通过 OpenAI Images API 支持 gpt-image-2、gpt-image-2-4k 与 gpt-image-2-adobe；透明背景、非原生比例和自定义尺寸会在付费请求前自动路由 Adobe，并以单个 auto 分组 Key 支持文生图、编辑、多参考图、SSE、并发批量工作流与费用安全控制。",
+    "shortDescription": "默认 Image2 2K，可按需使用 Image2 4K。",
+    "longDescription": "来源于 88api.ai Token 聚合站的 Codex 专用生图插件，通过 OpenAI Images API 支持 gpt-image-2 与 gpt-image-2-4k，并以单个 auto 分组 Key 支持文生图、编辑、多参考图、SSE、并发批量工作流、固定比例尺寸校验与费用安全控制。",
     "developerName": "88api.ai",
     "category": "Productivity",
     "capabilities": ["Write"],
@@ -20,6 +20,6 @@
     "logo": "./assets/plugin-logo.png",
     "logoDark": "./assets/plugin-logo-dark.png",
     "websiteURL": "https://88api.ai/",
-    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片；普通任务使用默认 Image2，4K、透明背景和自定义尺寸按能力自动选择模型。"
+    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片；普通任务使用默认 Image2，明确要求 4K 时使用 Image2 4K。"
   }
 }
