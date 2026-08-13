@@ -1,6 +1,6 @@
 ---
 name: 88api-image-gen
-description: Generate or edit images through 88api.ai with gpt-image-2 or gpt-image-2-4k over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, or workflow batch editing.
+description: Generate or edit images through 88api.ai with gpt-image-2 or gpt-image-2-4k over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, workflow batch editing, or troubleshooting Codex Auto-mode sandbox and network-approval failures before an 88API request starts.
 ---
 
 # 88API-Image-Gen
@@ -98,6 +98,8 @@ node "<PLUGIN_ROOT>/scripts/generate.mjs" --batch-edit --edit --image "<one.png>
 
 Use the single configured Key for all modes. Each count, repeat, batch item, or workflow item remains an independent paid request.
 
+For two or more outputs, prepare the complete task list first and invoke `generate.mjs` exactly once. Use `--count` or `--repeat` for one repeated prompt and `--batch-inline` or `--batch` for different prompts. Keep `--concurrency 1` when the user asks for sequential execution. Never launch one Node process per image: repeated shell launches can trigger repeated Codex Auto-mode network approvals and prevent the remaining tasks from starting.
+
 ## Workflow batch edit
 
 ```powershell
@@ -109,6 +111,8 @@ Always dry-run first. The task count is item count multiplied by template count.
 ## No-charge dry-run
 
 `--dry-run` works without a Key and never calls the paid API. It prints the endpoint, model, tier, resolved preset size, task count, concurrency, and a sanitized request; reference bytes and Authorization are omitted.
+
+A dry-run does not grant network access to the later paid command. For workflow tasks, run at most one local dry-run, obtain the required confirmation, then start the entire paid batch with one `generate.mjs` invocation. Do not dry-run each image separately.
 
 ```powershell
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --model gpt-image-2-4k --prompt "<prompt>" --aspect 16:9 --preview --dry-run
@@ -127,6 +131,27 @@ Unsupported ratios are rejected before any paid request. Use `--resolve-size` an
 - `gpt-image-2-4k` 3:4 → `2448x3264`.
 
 The CLI validates every resolved preset for 16-pixel alignment, maximum edge, aspect ratio, and total pixels before a paid request. The plugin may locally crop or resize an upstream result to its resolved preset dimensions.
+
+## Codex Auto-mode network approval
+
+Codex Auto mode can require approval before a shell command reaches the network. This approval happens outside the plugin and may fail before Node or the 88API request starts.
+
+When the tool layer explicitly reports an external-network execution authorization error, sandbox network denial, approval-service failure, or approval-service `429 Too Many Requests`:
+
+1. Do not call it an 88API, Key, channel, or model rate limit. An 88API response is reported by the plugin as `HTTP <status>`, not as a Codex authorization-service error.
+2. Check whether this invocation produced any plugin task-start or request output. Treat tasks blocked before the process/request started as not submitted to 88API; they have no corresponding 88API usage log or charge. Report any earlier accepted or completed tasks separately because those may be billed.
+3. Explain the cause instead of only repeating the raw 429. Use this wording, adapted to the actual task counts:
+
+   > 这不是 88API 返回的 429，而是 Codex Auto 模式的外部网络执行审批在请求发出前被限流。本次被拦截的任务尚未发送到 88API，因此 88API 没有对应日志，也不会产生这部分费用；此前已经受理的任务仍按实际结果计费。
+
+4. Tell the user how to continue without repeated approval calls:
+   - Open Codex desktop settings with `Ctrl+,` on Windows.
+   - Go to **General（通用）→ Permissions（权限）** and enable **Full access（完全访问）**.
+   - Return to the task, open the permission control below the composer, and select **Full access（完全访问）**.
+   - Resubmit all remaining images in one batch invocation.
+5. Warn that Full access（完全访问） removes the local sandbox and approval boundary for that task. Let the user choose it; never edit their global Codex permission configuration silently. If Full access is unavailable or disabled, explain that an organization policy may control it and fall back to one batch command with a single approval.
+
+Do not use `[NO-AUTO-RETRY]` for a command that was clearly blocked before any request reached 88API. It is safe to resubmit only the confirmed-unstarted tasks after the user changes permissions. If submission state is unclear, preserve the unknown-state cost warning.
 
 ## Retry and cost safety
 
