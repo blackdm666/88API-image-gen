@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.0.3";
+const PLUGIN_VERSION = "2.0.4";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
