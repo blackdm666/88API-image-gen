@@ -135,7 +135,16 @@ All models use:
 - `POST /v1/images/generations` for generation.
 - `POST /v1/images/edits` for edits.
 
-Never route to `/v1/responses`. Never retry an accepted or unknown-state request. Errors prefixed with `[NO-RETRY]` are final until the user checks 88API usage logs. Only clearly pre-acceptance transient failures are eligible for the bounded key-aware retry policy.
+Never route to `/v1/responses`. Errors prefixed with `[NO-AUTO-RETRY]` mean the current process must stop because the paid request was accepted or its cloud state is unknown. Do not automatically requeue it, switch models, fall back, or silently submit a replacement.
+
+This marker is not a permanent ban on future user requests. After reporting that the previous request may still be billed, let the user choose what to do next:
+
+- If the user explicitly says to retry, regenerate, resubmit, or try once more, treat that message as authorization for exactly one new paid request and run it. Do not require the user to inspect 88API logs first.
+- If the user has not explicitly authorized another paid request, stop and ask whether they want to check the 88API usage log or submit one new request.
+- Never infer authorization from the original request alone. A retry issued by the CLI scheduler is still automatic and remains forbidden for `[NO-AUTO-RETRY]` failures.
+- Treat legacy `[NO-RETRY]` output from an older installed version with the same rules.
+
+Only clearly pre-acceptance transient failures are eligible for the bounded key-aware automatic retry policy.
 
 ## Completion
 
@@ -144,4 +153,4 @@ After generation or editing:
 1. Report the actual model and 2K/4K tier.
 2. Report the saved absolute path, final dimensions, request slot, and elapsed time.
 3. Display each successful image when the client supports local image rendering.
-4. Report partial failures and `[NO-RETRY]` states clearly; do not conceal them or silently generate replacements.
+4. Report partial failures and `[NO-AUTO-RETRY]` states clearly; do not conceal them or silently generate replacements. If the user explicitly requests another attempt, submit exactly one new request.
