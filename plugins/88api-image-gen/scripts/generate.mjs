@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.0.0";
+const PLUGIN_VERSION = "2.0.3";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
@@ -41,6 +41,7 @@ const MAX_EDIT_SOURCES = 10;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 180_000;
+const NO_AUTO_RETRY_PREFIX = "[NO-AUTO-RETRY]";
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655_360;
 const IMAGE_MAX_PIXELS = 8_294_400;
@@ -613,9 +614,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isNoAutoRetryError(error) {
+  const text = String(error || "").toLowerCase();
+  return text.includes("[no-auto-retry]") || text.includes("[no-retry]");
+}
+
 function isRetryableError(error) {
   const text = String(error || "").toLowerCase();
-  if (text.includes("[no-retry]")) return false;
+  // Unknown-state failures must never be requeued by this process. A user may
+  // still explicitly authorize a new paid request after seeing the warning.
+  if (isNoAutoRetryError(text)) return false;
   return [
     "http 429",
     "http 502",
@@ -1250,7 +1258,7 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
         ok: false,
         elapsed,
         error: preview
-          ? "[NO-RETRY] Images API stream completed without a final image; server accepted the paid request"
+          ? `${NO_AUTO_RETRY_PREFIX} Images API stream completed without a final image; server accepted the paid request`
           : "Images API response did not contain an image result",
       };
     }
@@ -1262,7 +1270,7 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: `[NO-RETRY] Images request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
+      error: `${NO_AUTO_RETRY_PREFIX} Images request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
     };
   }
 }
@@ -1345,7 +1353,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: `[NO-RETRY] Images edit request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
+      error: `${NO_AUTO_RETRY_PREFIX} Images edit request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
       sourceName,
     };
   }
@@ -3188,7 +3196,10 @@ async function runImageStreamSelfTest() {
   const safetyOk = resolveRunTransport("auto") === "images"
     && resolveRunTransport("images") === "images"
     && responsesRejected
-    && isRetryableError("[NO-RETRY] Images API stream timed out") === false
+    && isNoAutoRetryError("[NO-AUTO-RETRY] Current unknown-state error") === true
+    && isNoAutoRetryError("[NO-RETRY] Legacy unknown-state error") === true
+    && isRetryableError("[NO-AUTO-RETRY] Images API stream timed out") === false
+    && isRetryableError("[NO-RETRY] Legacy unknown-state error") === false
     && parseArgs(["--prompt", "mock", "--transport", "images", "--preview"]).flags.transport === "images"
     && parseArgs(["--prompt", "mock", "--transport", "images", "--preview"]).flags.preview === true;
   if (!payloadOk || !streamOk || !safetyOk) {

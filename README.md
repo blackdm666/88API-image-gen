@@ -72,7 +72,7 @@ node plugins/88api-image-gen/scripts/generate.mjs --self-test
 - 不使用 Chat Completions 或 `/v1/responses`
 - `--dry-run` 和 `--self-test` 不调用付费生图接口，也不输出 Key 或参考图 Base64
 - 单张文生图显式使用 `--preview` 时启用 Images API SSE；默认等待最终 JSON
-- 已受理或状态未知的请求标记为 `[NO-RETRY]`，不会自动重发或跨模型回退
+- 已受理或状态未知的请求标记为 `[NO-AUTO-RETRY]`，不会自动重发或跨模型回退；用户明确说“重试/重新生成”后可提交 1 次新请求
 
 ## 常见问题
 
@@ -80,11 +80,11 @@ node plugins/88api-image-gen/scripts/generate.mjs --self-test
 - **`@` 菜单没有插件：**更新或重新安装插件，然后新建任务。
 - **旧配置保存了已移除模型：**v2.0.0 读取配置时会自动回退到 `gpt-image-2`。
 - **比例不支持：**从上方 11 个比例中选择；插件不会自动改成其他比例。
-- **请求超时或出现 `[NO-RETRY]`：**先在 88API 使用日志确认状态，不要立即重新生成。
+- **请求超时或出现 `[NO-AUTO-RETRY]`：**旧请求可能仍会计费，插件不会自行重发。用户了解风险后明确说“重试/重新生成”，Codex 应直接提交 1 次新请求，不强制先查使用日志。
 
 ## 项目信息
 
-- 版本：`2.0.0`
+- 版本：`2.0.3`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件：`88api-image-gen@88api-plugins`
-- 更新说明：[docs/更新说明-v2.0.0.md](docs/更新说明-v2.0.0.md)
+- 更新说明：[docs/更新说明-v2.0.3.md](docs/更新说明-v2.0.3.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
