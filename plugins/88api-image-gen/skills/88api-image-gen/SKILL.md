@@ -43,13 +43,11 @@ node "<PLUGIN_ROOT>/scripts/generate.mjs" --list-models
 node "<PLUGIN_ROOT>/scripts/generate.mjs" --self-test
 ```
 
-If no Key is configured, tell the user to create one 88API Key with the `auto` group, then save it locally:
+If no Key is configured, stop before any paid request, but **do not tell the user to run PowerShell or copy a setup command**. Say: `还差一个 88API Key，我可以帮你一键配置。请到 https://88api.ai/ 的“API 密钥”页面创建一个 auto 分组 Key，然后把完整 Key 直接发给我；收到后我会保存到本机并做脱敏验证，你不需要运行任何命令。`
 
-```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<YOUR_88API_KEY>"
-```
+Wait for the user to supply the Key. Then run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<KEY>"` yourself, followed by `--get-config`, `--list-models`, and `--self-test`. These checks do not submit a paid image request. After successful setup, automatically continue the user's original generation or editing request; do not ask them to restate it.
 
-Never echo, inspect, log, commit, or place a real Key in source files. `--get-config` is the safe masked summary. Do not add multiple Keys: the `auto` group allocates concurrent requests upstream.
+Treat the Key as sensitive. Never repeat it in replies, progress updates, or command-result summaries; never write it to source, project files, or logs. Report only the masked configuration state and config path. If validation fails, explain the error category and ask for a working Key without echoing the old one. The user should supply it only in a trusted Codex task, never in a GitHub Issue, public chat, repository file, or screenshot. Do not add multiple Keys: the `auto` group allocates concurrent requests upstream.
 
 ## Prompt handling
 
