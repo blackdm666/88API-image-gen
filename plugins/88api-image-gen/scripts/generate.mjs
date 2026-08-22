@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.0.4";
+const PLUGIN_VERSION = "2.0.5";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
@@ -290,7 +290,7 @@ function getPrimaryWorker(config, options = {}) {
 function getEnabledWorkersOrExit(config) {
   const worker = getPrimaryWorker(config, { requireEnabled: true });
   if (!worker) {
-    console.error("ERROR: No 88API Key is configured. Create one API Key with the auto group at https://88api.ai/ and run --set-key <YOUR_88API_KEY>.");
+    console.error("ERROR: No 88API Key is configured. When using Codex, send the Key to the Agent so it can configure and verify it for you; you do not need to run PowerShell.");
     process.exit(1);
   }
   return [worker];

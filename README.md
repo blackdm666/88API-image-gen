@@ -21,7 +21,14 @@ v2.0.0 只保留以上两个模型，不再提供透明背景、自定义像素�
 
 ![复制 API Key](docs/assets/88api-copy-key.png)
 
-配置命令：
+安装插件后，直接向 **88API-Image-Gen** 描述生图或改图需求。Agent 会先自动检查 Key；如果尚未配置，它会主动请你提供完整 Key。你只需把 Key 发给 Agent，Agent 会自动保存、脱敏核验并继续原任务，不需要打开 PowerShell。
+
+配置保存在 `~/.codex/88api-image-gen-config.json`。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生图请求。
+
+只在自己信任的 Codex 任务中提供 Key，不要发布到 GitHub Issue、公开聊天、仓库文件或截图中。
+
+<details>
+<summary>高级用户：手动配置命令</summary>
 
 ```powershell
 node plugins/88api-image-gen/scripts/generate.mjs --set-key "<YOUR_88API_KEY>"
@@ -30,7 +37,7 @@ node plugins/88api-image-gen/scripts/generate.mjs --list-models
 node plugins/88api-image-gen/scripts/generate.mjs --self-test
 ```
 
-真实 Key 只应保存在自己的 Codex 配置中，不要发布到 Issue、公开聊天、仓库或截图里。
+</details>
 
 ## 在 Codex 中使用
 
@@ -93,7 +100,7 @@ Codex 的 Auto 模式可能在插件脚本访问网络前发起外网执行审�
 
 ## 常见问题
 
-- **没有 Key：**创建一个 `auto` 分组 Key，然后执行 `--set-key`。
+- **没有 Key：**创建一个 `auto` 分组 Key并把完整 Key 发给 Agent，由 Agent 一键保存和脱敏验证，不需要自己运行命令。
 - **`@` 菜单没有插件：**更新或重新安装插件，然后新建任务。
 - **旧配置保存了已移除模型：**v2.0.0 读取配置时会自动回退到 `gpt-image-2`。
 - **比例不支持：**从上方 11 个比例中选择；插件不会自动改成其他比例。
@@ -102,7 +109,7 @@ Codex 的 Auto 模式可能在插件脚本访问网络前发起外网执行审�
 
 ## 项目信息
 
-- 版本：`2.0.4`
+- 版本：`2.0.5`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件：`88api-image-gen@88api-plugins`
-- 更新说明：[docs/更新说明-v2.0.4.md](docs/更新说明-v2.0.4.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[docs/更新说明-v2.0.5.md](docs/更新说明-v2.0.5.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
