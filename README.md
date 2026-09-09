@@ -2,12 +2,14 @@
 
 来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用生图插件。通过 OpenAI Images API 支持文生图、参考图编辑、多参考图、SSE 预览、批量任务、workflow 和本地保存。
 
-| 模型 | 固定档位 | 适合场景 |
+| 模型 | 插件尺寸预设 | 适合场景 |
 | --- | --- | --- |
 | `gpt-image-2`（默认） | 2K | 日常生成、常规编辑和批量生产 |
 | `gpt-image-2-4k` | 4K | 用户明确要求 4K、高分辨率展示或印刷素材 |
+| `gpt-image-2.5-flare` | 2K 预设 | Image 2.5 Flare，文生图、编辑与批量任务 |
+| `gpt-image-2.5-sunburst` | 2K 预设 | Image 2.5 Sunburst，文生图、编辑与复杂构图 |
 
-v2.0.0 只保留以上两个模型，不再提供透明背景、自定义像素尺寸、非支持比例自动路由或第三个模型。
+v2.1.0 新增两个 Image 2.5 模型，保留 Image2 2K/4K。不提供透明背景、自定义像素尺寸或非支持比例自动路由。
 
 ## 环境与 Key
 
@@ -50,7 +52,7 @@ node plugins/88api-image-gen/scripts/generate.mjs --self-test
 @88API-Image-Gen 根据这个要求生成 3 张不同方案。
 ```
 
-普通任务使用 `gpt-image-2`。用户明确要求 4K 时，单次使用 `gpt-image-2-4k`；只有用户明确要求改变长期默认模型时才执行 `--set-model`。
+普通任务使用 `gpt-image-2`。点名 Image 2.5 时，单次传入 `--model gpt-image-2.5-flare` 或 `--model gpt-image-2.5-sunburst`。两个新模型沿用插件 2K 尺寸预设，这不代表上游仅支持 2K。用户未指定其它模型而明确要求 4K 时，单次使用 `gpt-image-2-4k`；只有用户明确要求改变长期默认模型时才执行 `--set-model`。
 
 一次需要生成两张或更多图片时，Codex 应先整理完整任务清单，再通过一条 `--count`、`--repeat`、`--batch-inline` 或 `--batch` 命令提交。不要每张图片分别启动一次插件进程，否则 Auto 模式可能反复触发外网审批，导致后续任务尚未到达 88API 就被拦截。
 
@@ -109,7 +111,7 @@ Codex 的 Auto 模式可能在插件脚本访问网络前发起外网执行审�
 
 ## 项目信息
 
-- 版本：`2.0.5`
+- 版本：`2.1.0`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件：`88api-image-gen@88api-plugins`
-- 更新说明：[docs/更新说明-v2.0.5.md](docs/更新说明-v2.0.5.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[docs/更新说明-v2.1.0.md](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)

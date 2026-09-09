@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.0.5";
+const PLUGIN_VERSION = "2.1.0";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
@@ -24,6 +24,20 @@ const MODEL_INFO = [
     resolution: "4K",
     profile: "4K 高分辨率输出",
     recommendedFor: ["4K 海报", "大屏与印刷素材", "高分辨率参考图编辑"],
+  },
+  {
+    id: "gpt-image-2.5-flare",
+    default: false,
+    resolution: "2K",
+    profile: "Image 2.5 Flare（插件使用 2K 预设）",
+    recommendedFor: ["日常文生图", "参考图编辑", "批量生产"],
+  },
+  {
+    id: "gpt-image-2.5-sunburst",
+    default: false,
+    resolution: "2K",
+    profile: "Image 2.5 Sunburst（插件使用 2K 预设）",
+    recommendedFor: ["复杂构图", "参考图编辑", "产品设计"],
   },
 ];
 const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
@@ -3261,7 +3275,16 @@ async function runModelConfigSelfTest() {
   } catch {
     removedModelRejected = true;
   }
-  const ok = MODEL_INFO.length === 2
+  const newModelsOk = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"].every((model) => {
+    const normalized = normalizeConfigShape({ ...legacy, model }).config;
+    saveConfig(normalized, configPath);
+    return loadConfig(configPath).model === model
+      && effectiveModel({}, normalized) === model
+      && effectiveModel({ model }, persisted) === model
+      && resolveSize(model, "16:9") === "2048x1152";
+  });
+  const ok = MODEL_INFO.length === 4
+    && newModelsOk
     && presetSizesOk
     && migratedDefaultModel === DEFAULT_MODEL
     && removedModelFallback === DEFAULT_MODEL
@@ -3472,7 +3495,7 @@ DEFAULTS
   factory model: ${DEFAULT_MODEL}
   models: ${[...MODELS].join(", ")}
   API mode: OpenAI Images API only; no GPT text model required
-  resolution: gpt-image-2=2K; gpt-image-2-4k=4K
+  resolution: gpt-image-2=2K; gpt-image-2-4k=4K; gpt-image-2.5-flare / gpt-image-2.5-sunburst=2K preset
   output: ~/Pictures/88api-image-gen
   scheduler: one configured Key with up to ${MAX_CONCURRENCY} local request slots; upstream allocation uses the auto group
   adaptive: on, concurrency ${DEFAULTS.concurrency}, retries ${MAX_RETRIES}, key cooldown ${DEFAULT_WORKER_COOLDOWN_MS / 1000}s

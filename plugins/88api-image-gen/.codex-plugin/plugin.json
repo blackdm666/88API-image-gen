@@ -1,7 +1,7 @@
 {
   "name": "88api-image-gen",
-  "version": "2.0.5",
-  "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、Image2 4K、SSE 与批量工作流。",
+  "version": "2.1.0",
+  "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、Image2 4K、Image 2.5 Flare/Sunburst、SSE 与批量工作流。",
   "author": {
     "name": "88api.ai"
   },
@@ -10,8 +10,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "88API-Image-Gen",
-    "shortDescription": "Image-2 默认 2K，支持 4K、批量出图与图生图。",
-    "longDescription": "通过 88API 生成和编辑图片。默认使用 Image-2 2K，需要更高分辨率时可选 Image-2 4K；支持文生图、图生图、多参考图、批量出图与工作流任务。",
+    "shortDescription": "支持 Image 2.5 Flare/Sunburst、Image2 2K/4K、批量出图与图生图。",
+    "longDescription": "通过 88API 生成和编辑图片。默认使用 Image-2 2K，可选 Image 2.5 Flare/Sunburst（2K 预设）或 Image-2 4K；支持文生图、图生图、多参考图、批量出图与工作流任务。",
     "developerName": "88api.ai",
     "category": "Productivity",
     "capabilities": ["Write"],
@@ -20,6 +20,6 @@
     "logo": "./assets/plugin-logo.png",
     "logoDark": "./assets/plugin-logo-dark.png",
     "websiteURL": "https://88api.ai/",
-    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片。开始前自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。普通任务使用默认 Image2，明确要求 4K 时使用 Image2 4K。"
+    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片。开始前自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。普通任务使用默认 Image2；明确点名 Image 2.5 Flare/Sunburst 时使用对应模型的 2K 预设，未点名模型而明确要求 4K 时使用 Image2 4K。"
   }
 }

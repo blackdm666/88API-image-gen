@@ -1,11 +1,11 @@
 ---
 name: 88api-image-gen
-description: Generate or edit images through 88api.ai with gpt-image-2 or gpt-image-2-4k over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, workflow batch editing, or troubleshooting Codex Auto-mode sandbox and network-approval failures before an 88API request starts.
+description: Generate or edit images through 88api.ai with gpt-image-2, gpt-image-2-4k, gpt-image-2.5-flare, or gpt-image-2.5-sunburst over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, workflow batch editing, or troubleshooting Codex Auto-mode sandbox and network-approval failures before an 88API request starts.
 ---
 
 # 88API-Image-Gen
 
-Use this skill for image generation and image editing through the installed 88API plugin. It supports two models, OpenAI Images generation/edit endpoints, partial-image SSE for one text-to-image task, one auto-group Key with concurrent request slots, batch tasks, and resumable workflows.
+Use this skill for image generation and image editing through the installed 88API plugin. It supports four models, OpenAI Images generation/edit endpoints, partial-image SSE for one text-to-image task, one auto-group Key with concurrent request slots, batch tasks, and resumable workflows.
 
 ## Resolve the runtime
 
@@ -19,16 +19,20 @@ Do not assume a fixed marketplace cache path or copy the script elsewhere.
 
 ## Model selection
 
-1. If the user explicitly requests 4K, pass `--model gpt-image-2-4k` for that invocation.
-2. If the user explicitly names `gpt-image-2` or `gpt-image-2-4k`, pass that value with `--model`.
+1. If the user explicitly names any supported model below, pass its exact ID with `--model`. Do not substitute another model.
+2. If the user explicitly requests 4K without naming a model, pass `--model gpt-image-2-4k` for that invocation. If they name a 2.5 model and request 4K, explain that this plugin currently exposes its 2K preset and resolve that conflict before generation.
 3. Otherwise omit `--model`; the CLI uses the saved model, then the factory default `gpt-image-2`.
 4. Do not run `--set-model` unless the user explicitly wants to change the long-term default.
 5. Never switch models after an accepted or unknown-state request.
 
-Model tiers are fixed:
+Plugin size presets are fixed:
 
 - `gpt-image-2`: 2K matrix.
 - `gpt-image-2-4k`: 4K matrix.
+- `gpt-image-2.5-flare`: 2K preset.
+- `gpt-image-2.5-sunburst`: 2K preset.
+
+The 2.5 presets reuse the existing 2K matrix; they do not claim an upstream 2K capability limit.
 
 The legacy `--quality` flag is accepted for compatibility but cannot override the model tier. Exact custom pixel dimensions, transparent output, and unsupported aspect ratios are not provided by this plugin. Never invent or pass removed options for those requests; explain the limitation and ask the user to select a supported ratio when necessary.
 
