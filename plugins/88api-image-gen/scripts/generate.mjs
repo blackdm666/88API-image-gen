@@ -4,11 +4,12 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.1.0";
+const PLUGIN_VERSION = "2.2.0";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
@@ -54,7 +55,12 @@ const MAX_BATCH_PROMPTS = 20;
 const MAX_EDIT_SOURCES = 10;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 15_000;
-const REQUEST_TIMEOUT_MS = 180_000;
+const REQUEST_TIMEOUT_MS = 600_000;
+const RESULT_DOWNLOAD_ATTEMPTS = 3;
+const RESULT_DOWNLOAD_BACKOFF_MS = [2_000, 5_000];
+// Socket errors that happen before any request byte reaches 88API. Only these
+// prove a paid request was never submitted.
+const CONNECT_FAILURE_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "EHOSTUNREACH", "ENETUNREACH"]);
 const NO_AUTO_RETRY_PREFIX = "[NO-AUTO-RETRY]";
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655_360;
@@ -653,6 +659,7 @@ function isRetryableError(error) {
     "temporarily unavailable",
     "overloaded",
     "fetch failed",
+    "request was not sent",
     "socket hang up",
     "econnreset",
     "terminated",
@@ -1085,14 +1092,88 @@ function extractImagesFromImageApi(data) {
     .filter((item) => typeof item === "string" && item.trim());
 }
 
-async function imageApiResultBase64(data) {
+class ImageResultDownloadError extends Error {}
+
+function networkErrorDetail(error) {
+  if (error?.name === "AbortError") return `timeout after ${REQUEST_TIMEOUT_MS / 1000}s`;
+  // Node fetch reports "fetch failed" and keeps the socket error in cause.
+  const cause = error?.cause;
+  const code = cause?.code || error?.code || "";
+  const message = cause?.message || error?.message || String(error);
+  return code && !message.includes(code) ? `${code}: ${message}` : message;
+}
+
+// Builds the error for a failed Images request from the stage it reached:
+// submit (state unknown unless the connection never opened), read-result
+// (the response arrived, so the image was generated and billed) or download
+// (already formatted with the saved result link).
+function imageRequestStageError(label, stage, error) {
+  if (error instanceof ImageResultDownloadError) return error.message;
+  const detail = networkErrorDetail(error);
+  if (stage === "submit" && CONNECT_FAILURE_CODES.has(error?.cause?.code || error?.code)) {
+    return `${label} request was not sent: could not connect to 88API (${detail}); no charge was made`;
+  }
+  if (stage === "submit") return `${NO_AUTO_RETRY_PREFIX} ${label} request state is unknown (stage: submit): ${detail}`;
+  return `${NO_AUTO_RETRY_PREFIX} ${label} request completed and was billed, but reading the result failed (stage: read-result): ${detail}`;
+}
+
+// Downloads a result link with free retries. HTTP(S) links are written to a
+// link file first, so an image that was already generated and billed can be
+// fetched later with --retry-download instead of paying for a new one.
+async function downloadImageResult(url, linkContext = {}) {
+  const linkFile = /^https?:/i.test(url) && linkContext.outputDir
+    ? saveResultLink(url, linkContext)
+    : null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= RESULT_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await requestWithTimeout(url, { headers: { "User-Agent": `88api-image-gen/${PLUGIN_VERSION}` } }, REQUEST_TIMEOUT_MS);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const base64 = Buffer.from(await res.arrayBuffer()).toString("base64");
+      if (linkFile) unlinkSync(linkFile);
+      return base64;
+    } catch (error) {
+      lastError = error;
+      if (attempt < RESULT_DOWNLOAD_ATTEMPTS) {
+        const waitMs = RESULT_DOWNLOAD_BACKOFF_MS[attempt - 1];
+        console.log(`[download] 结果图下载失败（第 ${attempt} 次），${waitMs / 1000} 秒后免费重试：${networkErrorDetail(error)}`);
+        await sleep(waitMs);
+      }
+    }
+  }
+  const saved = linkFile
+    ? ` Result link saved to ${linkFile}; run --retry-download "${linkFile}" to fetch it again at no cost (the link may expire within about an hour).`
+    : "";
+  throw new ImageResultDownloadError(`${NO_AUTO_RETRY_PREFIX} Image was generated and billed, but downloading it failed after ${RESULT_DOWNLOAD_ATTEMPTS} attempts (stage: download): ${networkErrorDetail(lastError)}.${saved}`);
+}
+
+function saveResultLink(url, { outputDir, prefix = "img", savePath = null, targetSize = null, model = null }) {
+  const linkFile = join(resolveOutputDir(outputDir), `${prefix}_${timestamp()}_${Math.random().toString(36).slice(2, 6)}.pending-download.json`);
+  writeFileSync(linkFile, JSON.stringify({ url, savePath, outputDir, prefix, targetSize, model, createdAt: new Date().toISOString() }, null, 2));
+  return linkFile;
+}
+
+async function imageApiResultBase64(data, linkContext = {}) {
   const [base64] = extractImagesFromImageApi(data);
   if (base64) return base64;
   const item = Array.isArray(data?.data) ? data.data.find((entry) => typeof entry?.url === "string" && entry.url) : null;
   if (!item?.url) return "";
-  const res = await requestWithTimeout(item.url, { headers: { "User-Agent": `88api-image-gen/${PLUGIN_VERSION}` } }, REQUEST_TIMEOUT_MS);
-  if (!res.ok) throw new Error(`Image download failed: HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer()).toString("base64");
+  return downloadImageResult(item.url, linkContext);
+}
+
+// Fetches an image whose download failed earlier, from its saved link file.
+// No new Images request is sent, so this never costs anything.
+async function retrySavedDownload(linkFile) {
+  if (!existsSync(linkFile)) throw new Error(`Link file does not exist: ${linkFile}`);
+  const link = JSON.parse(readFileSync(linkFile, "utf8"));
+  if (!/^https?:/i.test(link?.url || "")) throw new Error(`Link file has no result URL: ${linkFile}`);
+  const base64 = await downloadImageResult(link.url, {});
+  const saved = link.savePath
+    ? saveBase64ImageToPath(base64, link.savePath, link.targetSize)
+    : saveBase64Image(base64, resolveOutputDir(link.outputDir), link.prefix || "img", null, link.targetSize);
+  if (!saved) throw new Error("Downloaded result is not an image");
+  unlinkSync(linkFile);
+  return saved;
 }
 
 function imageApiLogSummary(data, requestedModel = DEFAULT_MODEL) {
@@ -1159,7 +1240,7 @@ async function consumeImageApiStream(res, options = {}) {
   const contentType = String(res.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("text/event-stream")) {
     const data = await res.json();
-    const base64 = walkForImageApiBase64(data) || await imageApiResultBase64(data);
+    const base64 = walkForImageApiBase64(data) || await imageApiResultBase64(data, options.linkContext);
     return {
       base64,
       partialImageEvents: 0,
@@ -1222,7 +1303,7 @@ async function consumeImageApiStream(res, options = {}) {
   }
 
   if (!finalBase64 && !latestPartial && latestImageUrl) {
-    finalBase64 = await imageApiResultBase64({ data: [{ url: latestImageUrl }] });
+    finalBase64 = await imageApiResultBase64({ data: [{ url: latestImageUrl }] }, options.linkContext);
   }
 
   return {
@@ -1250,6 +1331,8 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
   const preview = options.preview === true;
   const model = validateModel(options.model || DEFAULT_MODEL);
   const start = Date.now();
+  const linkContext = { outputDir, prefix: "img", targetSize: resize ? size : null, model };
+  let stage = "submit";
   try {
     const res = await requestWithTimeout(IMAGES_GENERATIONS_URL, {
       method: "POST",
@@ -1260,11 +1343,12 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
       },
       body: JSON.stringify(buildImagesGenerationBody(model, prompt, size, { preview })),
     }, REQUEST_TIMEOUT_MS);
+    stage = "read-result";
     if (!res.ok) return { ok: false, elapsed: Date.now() - start, error: await parseErrorResponse(res) };
 
-    const streamed = preview ? await consumeImageApiStream(res, options) : null;
+    const streamed = preview ? await consumeImageApiStream(res, { ...options, linkContext }) : null;
     const data = preview ? null : await res.json();
-    const base64 = preview ? streamed?.base64 : await imageApiResultBase64(data);
+    const base64 = preview ? streamed?.base64 : await imageApiResultBase64(data, linkContext);
     const saved = saveBase64Image(base64, outputDir, "img", null, resize ? size : null);
     const elapsed = Date.now() - start;
     if (!saved) {
@@ -1284,7 +1368,7 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: `${NO_AUTO_RETRY_PREFIX} Images request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
+      error: imageRequestStageError("Images", stage, error),
     };
   }
 }
@@ -1339,6 +1423,10 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
   const start = Date.now();
   const sourceName = summarizeSources(sources);
   const rawLogPath = options.rawLogPath || null;
+  const linkContext = options.savePath
+    ? { outputDir: dirname(options.savePath), prefix: "edit", savePath: options.savePath, targetSize: resize ? size : null, model }
+    : { outputDir, prefix: "edit", targetSize: resize ? size : null, model };
+  let stage = "submit";
   try {
     const res = await requestWithTimeout(IMAGES_EDITS_URL, {
       method: "POST",
@@ -1348,6 +1436,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
       },
       body: buildImagesEditForm(model, prompt, size, sources),
     }, REQUEST_TIMEOUT_MS);
+    stage = "read-result";
     if (!res.ok) {
       const raw = await res.text().catch(() => "");
       if (rawLogPath) saveTextArtifact(rawLogPath, raw);
@@ -1356,7 +1445,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
 
     const data = await res.json();
     if (rawLogPath) saveTextArtifact(rawLogPath, JSON.stringify(imageApiLogSummary(data, model), null, 2));
-    const base64 = await imageApiResultBase64(data);
+    const base64 = await imageApiResultBase64(data, linkContext);
     const saved = options.savePath
       ? saveBase64ImageToPath(base64, options.savePath, resize ? size : null)
       : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, resize ? size : null);
@@ -1367,7 +1456,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
     return {
       ok: false,
       elapsed: Date.now() - start,
-      error: `${NO_AUTO_RETRY_PREFIX} Images edit request state is unknown: ${error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error?.message || String(error)}`,
+      error: imageRequestStageError("Images edit", stage, error),
       sourceName,
     };
   }
@@ -2294,6 +2383,9 @@ function classifyWorkflowError(error) {
   if (!text) return "";
   if (text.includes("http 524") || text.includes("timeout occurred") || text.includes("cloudflare timeout")) return "timeout_524";
   if (text.includes("images api response did not contain")) return "no_image_result";
+  if (text.includes("stage: download")) return "download_failed";
+  if (text.includes("stage: read-result")) return "read_result_failed";
+  if (text.includes("request was not sent")) return "not_sent";
   if (text.includes("fetch failed") || text.includes("terminated") || text.includes("socket hang up") || text.includes("econnreset")) return "network";
   if (text.includes("content policy") || text.includes("safety policy") || text.includes("moderation")) return "content_policy";
   if (text.includes("http 401") || text.includes("http 403") || text.includes("invalid api key") || text.includes("unauthorized") || text.includes("forbidden")) return "auth";
@@ -3325,10 +3417,88 @@ async function runModelConfigSelfTest() {
   return 0;
 }
 
+// Covers the three failure stages against a local HTTP server: a refused
+// connection is reported as not sent (auto-retry allowed), a failed read as
+// billed, and a failed result download retries for free, keeps its link file
+// and can be fetched later with --retry-download.
+async function runResultDownloadSelfTest() {
+  console.log("Result download self-test: stage errors, free download retries, and --retry-download.");
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const png = Buffer.from(pngB64, "base64");
+  let failuresLeft = 0;
+  const server = createServer((req, res) => {
+    if (failuresLeft > 0) {
+      failuresLeft -= 1;
+      res.writeHead(503).end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "image/png" }).end(png);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/result.png`;
+  const backoff = [...RESULT_DOWNLOAD_BACKOFF_MS];
+  RESULT_DOWNLOAD_BACKOFF_MS.fill(0);
+  const outputDir = resolveOutputDir(join(tmpdir(), `88api-image-gen-download-test-${Date.now()}`));
+  const pendingFiles = () => readdirSync(outputDir).filter((name) => name.endsWith(".pending-download.json"));
+  const checks = {};
+  try {
+    failuresLeft = RESULT_DOWNLOAD_ATTEMPTS - 1;
+    const recovered = await imageApiResultBase64({ data: [{ url }] }, { outputDir, prefix: "img" });
+    checks.retriesUntilSuccess = recovered === pngB64 && pendingFiles().length === 0;
+
+    failuresLeft = RESULT_DOWNLOAD_ATTEMPTS;
+    let downloadError = "";
+    try {
+      await imageApiResultBase64({ data: [{ url }] }, { outputDir, prefix: "img" });
+    } catch (error) {
+      downloadError = imageRequestStageError("Images", "read-result", error);
+    }
+    const [linkName] = pendingFiles();
+    checks.downloadFailureKeepsLink = !!linkName
+      && downloadError.includes("stage: download")
+      && downloadError.includes(linkName)
+      && isNoAutoRetryError(downloadError)
+      && classifyWorkflowError(downloadError) === "download_failed";
+
+    const saved = linkName ? await retrySavedDownload(join(outputDir, linkName)) : null;
+    checks.retryDownloadSavesImage = !!saved?.path && existsSync(saved.path) && saved.width === 1 && pendingFiles().length === 0;
+
+    // A port that was just bound and released refuses connections.
+    const closed = createServer();
+    await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    const closedPort = closed.address().port;
+    await new Promise((resolve) => closed.close(resolve));
+    let refused = null;
+    try {
+      await requestWithTimeout(`http://127.0.0.1:${closedPort}/v1/images/generations`, { method: "POST" }, 5_000);
+    } catch (error) {
+      refused = error;
+    }
+    const notSent = imageRequestStageError("Images", "submit", refused);
+    const unknown = imageRequestStageError("Images", "submit", Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET", message: "read ECONNRESET" } }));
+    const billed = imageRequestStageError("Images edit", "read-result", Object.assign(new TypeError("terminated"), { cause: { code: "UND_ERR_SOCKET", message: "other side closed" } }));
+    checks.stageMessages = notSent.includes("was not sent") && !isNoAutoRetryError(notSent) && isRetryableError(notSent)
+      && unknown.includes("state is unknown (stage: submit)") && unknown.includes("ECONNRESET") && isNoAutoRetryError(unknown)
+      && billed.includes("was billed") && billed.includes("stage: read-result") && isNoAutoRetryError(billed)
+      && classifyWorkflowError(billed) === "read_result_failed";
+  } finally {
+    RESULT_DOWNLOAD_BACKOFF_MS.splice(0, RESULT_DOWNLOAD_BACKOFF_MS.length, ...backoff);
+    server.close();
+  }
+  if (!Object.values(checks).every(Boolean) || Object.keys(checks).length !== 4) {
+    console.error("Result download self-test FAILED.");
+    console.error(JSON.stringify(checks, null, 2));
+    return 1;
+  }
+  console.log("Result download self-test OK.");
+  return 0;
+}
+
 async function runUnifiedSelfTest() {
   const tests = [
     ["adaptive", runAdaptiveSelfTest],
     ["images-api", runImagesApiSelfTest],
+    ["result-download", runResultDownloadSelfTest],
     ["image-stream", runImageStreamSelfTest],
     ["workflow", runWorkflowSelfTest],
     ["model-config", runModelConfigSelfTest],
@@ -3373,6 +3543,7 @@ function parseArgs(argv) {
     else if (value === "--repeat" && argv[i + 1]) args.flags.repeat = Number.parseInt(argv[++i], 10);
     else if (value === "--limit" && argv[i + 1]) args.flags.limit = Number.parseInt(argv[++i], 10);
     else if (value === "--output-dir" && argv[i + 1]) args.flags.outputDir = argv[++i];
+    else if (value === "--retry-download" && argv[i + 1]) args.flags.retryDownload = argv[++i];
     else if (value === "--concurrency" && argv[i + 1]) args.flags.concurrency = Number.parseInt(argv[++i], 10);
     else if (value === "--transport" && argv[i + 1]) args.flags.transport = argv[++i];
     else if (value === "--responses") args.flags.transport = "responses";
@@ -3425,6 +3596,7 @@ function parseArgs(argv) {
     else if (value === "--self-test-adaptive") args.flags.selfTestAdaptive = true;
     else if (value === "--self-test-workers") args.flags.selfTestAdaptive = true;
     else if (value === "--self-test-images-api") args.flags.selfTestImagesApi = true;
+    else if (value === "--self-test-download") args.flags.selfTestDownload = true;
     else if (value === "--self-test-image-stream" || value === "--self-test-responses" || value === "--self-test-edit-responses") args.flags.selfTestImageStream = true;
     else if (value === "--self-test-workflow") args.flags.selfTestWorkflow = true;
     else if (value === "--self-test") args.flags.selfTest = true;
@@ -3480,11 +3652,13 @@ NAIL STRESS TEST
   --nail-stress-test --persona path.png --product-dir dir [--limit ${NAIL_STRESS_DEFAULT_LIMIT}] [--aspect 9:16] [--concurrency 1..${MAX_CONCURRENCY}] [--dry-run]
 
 TOOLS
+  --retry-download path.pending-download.json    fetch an already generated and billed image from its saved result link; sends no new paid request
   --resolve-size --model MODEL --aspect 16:9
   --self-test
   --self-test-adaptive
   --self-test-workers
   --self-test-images-api
+  --self-test-download
   --self-test-image-stream
   --self-test-workflow
 
@@ -3581,6 +3755,17 @@ async function main() {
     return;
   }
 
+  if (flags.retryDownload) {
+    try {
+      const saved = await retrySavedDownload(flags.retryDownload);
+      console.log(`[OK] ${saved.path} (${formatImageResult(saved)})`);
+    } catch (error) {
+      console.error(`ERROR: ${error?.message || String(error)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (flags.configPath) {
     console.log(CONFIG_PATH);
     return;
@@ -3651,6 +3836,11 @@ async function main() {
 
   if (flags.selfTestImagesApi) {
     process.exitCode = await runImagesApiSelfTest();
+    return;
+  }
+
+  if (flags.selfTestDownload) {
+    process.exitCode = await runResultDownloadSelfTest();
     return;
   }
 
