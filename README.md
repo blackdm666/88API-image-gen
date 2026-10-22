@@ -1,6 +1,8 @@
 # 88API-Image-Gen
 
-来自 [88api.ai](https://88api.ai/) Token 聚合站的 Codex 专用生图插件。通过 OpenAI Images API 支持文生图、参考图编辑、多参考图、SSE 预览、批量任务、workflow 和本地保存。
+来自 [88api.ai](https://88api.ai/) Token 聚合站的生图插件。通过 OpenAI Images API 支持文生图、参考图编辑、多参考图、SSE 预览、批量任务、workflow 和本地保存。
+
+支持 **Codex、Claude Code、ZCode、DeepSeek Harness**，以及 Cursor、Cline、Windsurf、VS Code Copilot、Gemini CLI 等能读取 `SKILL.md` 技能、能运行本机 Node.js 命令的 Agent 客户端。
 
 | 模型 | 插件尺寸预设 | 适合场景 |
 | --- | --- | --- |
@@ -9,11 +11,11 @@
 | `gpt-image-2.5-flare` | 2K 预设 | Image 2.5 Flare，文生图、编辑与批量任务 |
 | `gpt-image-2.5-sunburst` | 2K 预设 | Image 2.5 Sunburst，文生图、编辑与复杂构图 |
 
-v2.2.0 把请求超时延长到 10 分钟，按"提交 / 读取结果 / 下载"分别报错，结果图下载失败会先保存链接并免费重试。v2.1.0 新增两个 Image 2.5 模型，保留 Image2 2K/4K。不提供透明背景、自定义像素尺寸或非支持比例自动路由。
+v2.3.0 起不再只限 Codex：新增 Claude Code / ZCode 插件清单，技能文件夹自带脚本可直接复制到其它客户端；Key 改存客户端通用的 `~/.88api/image-gen.json`（旧配置自动迁移）；每次付费运行都留提交记录，客户端超时中断后可用 `--job-status` 查清哪些已出图、哪些可能已扣费。v2.2.0 把请求超时延长到 10 分钟，按"提交 / 读取结果 / 下载"分别报错，结果图下载失败会先保存链接并免费重试。v2.1.0 新增两个 Image 2.5 模型，保留 Image2 2K/4K。不提供透明背景、自定义像素尺寸或非支持比例自动路由。
 
 ## 环境与 Key
 
-- Codex 插件功能
+- 上述任一 Agent 客户端
 - Node.js 18 或更高版本
 - 一个可调用上述模型的 88api.ai Key
 
@@ -25,21 +27,66 @@ v2.2.0 把请求超时延长到 10 分钟，按"提交 / 读取结果 / 下载"�
 
 安装插件后，直接向 **88API-Image-Gen** 描述生图或改图需求。Agent 会先自动检查 Key；如果尚未配置，它会主动请你提供完整 Key。你只需把 Key 发给 Agent，Agent 会自动保存、脱敏核验并继续原任务，不需要打开 PowerShell。
 
-配置保存在 `~/.codex/88api-image-gen-config.json`。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生图请求。
+配置保存在 `~/.88api/image-gen.json`，本机所有 Agent 客户端共用。旧版保存在 `~/.codex/88api-image-gen-config.json` 的 Key 会在第一次使用时自动复制过来，旧文件保留并同步更新，旧版插件仍可使用。Agent 不会在回复中显示完整 Key，验证过程也不会发起付费生图请求。
 
-只在自己信任的 Codex 任务中提供 Key，不要发布到 GitHub Issue、公开聊天、仓库文件或截图中。
+只在自己信任的 Agent 对话中提供 Key，不要发布到 GitHub Issue、公开聊天、仓库文件或截图中。发给 Agent 的 Key 可能留在客户端的对话记录里；不想发送时，可以改为设置环境变量 `API88_KEY`（优先于配置文件，不写入磁盘）。
 
 <details>
 <summary>高级用户：手动配置命令</summary>
 
 ```powershell
-node plugins/88api-image-gen/scripts/generate.mjs --set-key "<YOUR_88API_KEY>"
-node plugins/88api-image-gen/scripts/generate.mjs --get-config
-node plugins/88api-image-gen/scripts/generate.mjs --list-models
-node plugins/88api-image-gen/scripts/generate.mjs --self-test
+node plugins/88api-image-gen/skills/88api-image-gen/scripts/generate.mjs --set-key "<YOUR_88API_KEY>"
+node plugins/88api-image-gen/skills/88api-image-gen/scripts/generate.mjs --get-config
+node plugins/88api-image-gen/skills/88api-image-gen/scripts/generate.mjs --list-models
+node plugins/88api-image-gen/skills/88api-image-gen/scripts/generate.mjs --self-test
 ```
 
 </details>
+
+## 安装
+
+### Codex
+
+```powershell
+codex plugin marketplace add blackdm666/88API-image-gen
+```
+
+然后在 Codex 插件列表中安装 **88API-Image-Gen** 并新建任务。已安装旧版的用户运行 `codex plugin marketplace upgrade 88api-plugins` 升级。
+
+### Claude Code
+
+```text
+/plugin marketplace add blackdm666/88API-image-gen
+/plugin install 88api-image-gen@88api-plugins
+```
+
+也可以在终端运行 `claude plugin marketplace add blackdm666/88API-image-gen` 和 `claude plugin install 88api-image-gen@88api-plugins`。安装后直接描述需求即可，Claude 会按技能说明调用插件。
+
+### ZCode
+
+ZCode 兼容 Claude Code 插件格式：打开 **设置 → Plugins → Create → Add marketplace**，填入 `blackdm666/88API-image-gen`，然后安装 **88api-image-gen**。
+
+### DeepSeek Harness、Cursor、Cline 等其它客户端
+
+整个技能文件夹 `plugins/88api-image-gen/skills/88api-image-gen/`（含 `SKILL.md` 和 `scripts/generate.mjs`）就是完整的安装包，复制到客户端的技能目录即可，例如：
+
+| 客户端 | 用户级技能目录 |
+| --- | --- |
+| DeepSeek Harness | `~/.dsh/skills/` 或 `~/.agents/skills/` |
+| Cursor、Codex、Gemini CLI 等认公共目录的客户端 | `~/.agents/skills/` |
+| Cline | `~/.cline/skills/` |
+| ZCode（不用插件时） | `~/.zcode/skills/` |
+
+复制后保持文件夹名为 `88api-image-gen`，新开对话让客户端重新加载技能。DeepSeek Harness 也可以继续使用原生插件 [dsh-plugin-88api-image](https://github.com/blackdm666/dsh-plugin-88api-image)。
+
+## 长任务与中断
+
+一张图最长可能要 10 分钟，批量更久，而不少客户端会更早结束命令（例如 Claude Code 的命令默认 2 分钟超时）。命令被结束时，请求可能已经被 88API 受理并扣费。
+
+- 技能已要求 Agent 在 Claude Code 中把付费命令放到后台运行，其它客户端也优先用后台 / 长命令。
+- 每次付费运行开头会打印 `Job record` 和任务号，提交记录保存在 `~/.88api/image-gen-jobs/`。
+- 命令中断、超时或看不清结果时，运行 `--job-status <任务号>`（不带参数列出最近几次）查看每个请求的实际状态：已保存、未发出、88API 拒绝、仍在运行，或 `[NO-AUTO-RETRY]` 状态未知 / 被中断（可能已扣费）。这个命令不发请求、不收费。
+- `--json` 会在付费运行结束时多输出一行机器可读的结果，格式和 `--job-status` 相同。
 
 ## 在 Codex 中使用
 
@@ -103,18 +150,19 @@ Codex 的 Auto 模式可能在插件脚本访问网络前发起外网执行审�
 ## 常见问题
 
 - **没有 Key：**创建一个 `auto` 分组 Key并把完整 Key 发给 Agent，由 Agent 一键保存和脱敏验证，不需要自己运行命令。
-- **`@` 菜单没有插件：**更新或重新安装插件，然后新建任务。
+- **`@` 菜单没有插件（Codex）或技能没生效：**更新或重新安装插件，然后新建任务 / 新开对话。
 - **旧配置保存了已移除模型：**v2.0.0 读取配置时会自动回退到 `gpt-image-2`。
 - **比例不支持：**从上方 11 个比例中选择；插件不会自动改成其他比例。
 - **报错写着 `request was not sent`：**连不上 88API，请求没有发出、没有扣费，插件会自动重试。
 - **报错写着 `stage: read-result`：**图已生成并扣费，只是读取结果时连接断了。
 - **报错写着 `stage: download`：**图已生成并扣费，下载结果图时失败（已自动免费重试 3 次）。报错里有一个 `.pending-download.json` 链接文件，运行 `--retry-download <链接文件>` 可免费再下载一次；链接约 1 小时后可能失效。
-- **请求超时（10 分钟）或出现 `[NO-AUTO-RETRY]`：**旧请求可能仍会计费，插件不会自行重发。用户了解风险后明确说“重试/重新生成”，Codex 应直接提交 1 次新请求，不强制先查使用日志。
+- **请求超时（10 分钟）或出现 `[NO-AUTO-RETRY]`：**旧请求可能仍会计费，插件不会自行重发。用户了解风险后明确说“重试/重新生成”，Agent 应直接提交 1 次新请求，不强制先查使用日志。
+- **客户端把命令中断了，不知道有没有出图：**运行 `--job-status`，按其中每个请求的状态处理；状态是 `interrupted` / `unknown` 的不要自动重发。
 - **Auto 模式提示外网审批 429，但 88API 没有日志：**请求在到达插件 API 之前就被 Codex 审批层拦截。不要排查 88API Key 或渠道；按上方步骤启用 Full access（完全访问），或把剩余任务合并为一条批量命令并完成一次审批。
 
 ## 项目信息
 
-- 版本：`2.2.0`
+- 版本：`2.3.0`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
-- 插件：`88api-image-gen@88api-plugins`
-- 更新说明：[docs/更新说明-v2.2.0.md](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 插件：`88api-image-gen@88api-plugins`（Codex、Claude Code、ZCode 同名）
+- 更新说明：[docs/更新说明-v2.3.0.md](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)

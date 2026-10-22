@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 const API_ROOT = "https://88api.ai";
 const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.2.0";
+const PLUGIN_VERSION = "2.3.0";
 const DEFAULT_MODEL = "gpt-image-2";
 const MODEL_INFO = [
   {
@@ -44,8 +44,20 @@ const MODEL_INFO = [
 const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
 const DEFAULT_TRANSPORT = "images";
 const TRANSPORTS = new Set(["auto", "images"]);
-const CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
-const LEGACY_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
+// Client-neutral config location. API88_CONFIG_DIR overrides the directory;
+// API88_KEY overrides the saved Key for one process without being written.
+const CONFIG_DIR_OVERRIDDEN = !!String(process.env.API88_CONFIG_DIR || "").trim();
+const CONFIG_DIR = CONFIG_DIR_OVERRIDDEN ? resolve(String(process.env.API88_CONFIG_DIR).trim()) : join(homedir(), ".88api");
+const CONFIG_PATH = join(CONFIG_DIR, "image-gen.json");
+const JOBS_DIR = join(CONFIG_DIR, "image-gen-jobs");
+const ENV_API_KEY = String(process.env.API88_KEY || "").trim();
+// Read once and copied to CONFIG_PATH; never deleted. While the Codex-era file
+// exists, --set-key and other saves also update it so older installed plugin
+// versions keep using the current Key.
+const LEGACY_CODEX_CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
+const LEGACY_FHL_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
+const LEGACY_CONFIG_PATHS = [LEGACY_CODEX_CONFIG_PATH, LEGACY_FHL_CONFIG_PATH];
+const JOB_LIST_LIMIT = 5;
 
 const MAX_GENERATION_COUNT = 9;
 const MAX_REPEAT = 50;
@@ -261,8 +273,9 @@ function normalizeConfigShape(config) {
   return { config: normalized, changed };
 }
 
-function saveConfig(config, configPath = CONFIG_PATH) {
-  const { config: normalized } = normalizeConfigShape(config);
+let loadedConfigSource = null;
+
+function writeConfigFile(normalized, configPath) {
   mkdirSync(dirname(configPath), { recursive: true });
   const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -278,15 +291,40 @@ function saveConfig(config, configPath = CONFIG_PATH) {
   }
 }
 
-function loadConfig(configPath = CONFIG_PATH) {
-  const sourcePath = existsSync(configPath)
-    ? configPath
-    : (configPath === CONFIG_PATH && existsSync(LEGACY_CONFIG_PATH) ? LEGACY_CONFIG_PATH : null);
+function defaultLegacyPaths(configPath) {
+  return configPath === CONFIG_PATH && !CONFIG_DIR_OVERRIDDEN ? LEGACY_CONFIG_PATHS : [];
+}
+
+// Legacy files that each save also updates during the transition period.
+function legacyMirrorPaths(configPath) {
+  return configPath === CONFIG_PATH && !CONFIG_DIR_OVERRIDDEN && existsSync(LEGACY_CODEX_CONFIG_PATH) ? [LEGACY_CODEX_CONFIG_PATH] : [];
+}
+
+function saveConfig(config, configPath = CONFIG_PATH, mirrorPaths = legacyMirrorPaths(configPath)) {
+  const { config: normalized } = normalizeConfigShape(config);
+  writeConfigFile(normalized, configPath);
+  for (const mirrorPath of mirrorPaths) {
+    try {
+      writeConfigFile(normalized, mirrorPath);
+    } catch (error) {
+      console.warn(`WARNING: Saved ${configPath}, but could not update the legacy copy ${mirrorPath}: ${error?.message || String(error)}`);
+    }
+  }
+}
+
+function loadConfig(configPath = CONFIG_PATH, legacyPaths = defaultLegacyPaths(configPath)) {
+  const sourcePath = existsSync(configPath) ? configPath : (legacyPaths.find((path) => existsSync(path)) || null);
+  loadedConfigSource = sourcePath;
   if (!sourcePath) return normalizeConfigShape({}).config;
   try {
     const parsed = JSON.parse(readFileSync(sourcePath, "utf8"));
     const normalized = normalizeConfigShape(parsed);
-    if (normalized.changed || sourcePath === LEGACY_CONFIG_PATH) saveConfig(normalized.config, configPath);
+    if (sourcePath !== configPath) {
+      saveConfig(normalized.config, configPath, legacyMirrorPaths(configPath).filter((path) => path !== sourcePath));
+      console.warn(`NOTICE: Copied the 88API configuration from ${sourcePath} to ${configPath}; the old file was kept.`);
+    } else if (normalized.changed) {
+      saveConfig(normalized.config, configPath);
+    }
     return normalized.config;
   } catch (error) {
     console.warn(`WARNING: Unable to read 88API configuration at ${sourcePath}: ${error?.message || String(error)}`);
@@ -308,9 +346,10 @@ function getPrimaryWorker(config, options = {}) {
 }
 
 function getEnabledWorkersOrExit(config) {
+  if (ENV_API_KEY) return [{ id: "env", name: "API88_KEY", apiKey: ENV_API_KEY, enabled: true }];
   const worker = getPrimaryWorker(config, { requireEnabled: true });
   if (!worker) {
-    console.error("ERROR: No 88API Key is configured. When using Codex, send the Key to the Agent so it can configure and verify it for you; you do not need to run PowerShell.");
+    console.error("ERROR: No 88API Key is configured. Send the Key to the Agent so it can save and verify it for you (you do not need to run any command), or set the API88_KEY environment variable.");
     process.exit(1);
   }
   return [worker];
@@ -321,14 +360,17 @@ function workerLabel(worker) {
   return String(worker.name || "").trim() || String(worker.id || "").trim() || "unknown-worker";
 }
 
-function buildConfigSummary(config) {
+function buildConfigSummary(config, { envKey = ENV_API_KEY, source = loadedConfigSource } = {}) {
   const workers = getConfiguredWorkers(config);
   const primaryWorker = getPrimaryWorker(config);
   const legacyExtraCount = Math.max(0, workers.length - (primaryWorker ? 1 : 0));
+  const mirrors = legacyMirrorPaths(CONFIG_PATH);
   return {
     配置文件: CONFIG_PATH,
-    已配置Key: !!primaryWorker,
-    Key预览: primaryWorker ? previewKey(primaryWorker.apiKey) : null,
+    Key来源: envKey ? "环境变量 API88_KEY（优先于配置文件，不写入磁盘）" : (primaryWorker ? source || CONFIG_PATH : "未配置"),
+    旧版配置同步: mirrors.length > 0 ? `${mirrors.join(", ")}（保存时同步更新，供旧版插件使用）` : "无",
+    已配置Key: !!(envKey || primaryWorker),
+    Key预览: envKey ? previewKey(envKey) : (primaryWorker ? previewKey(primaryWorker.apiKey) : null),
     Key模式: "单 Key",
     上游分组: "请在 88API 控制台选择 auto；本地无法从 Key 反查分组",
     并发模式: "同一 Key 建立本地请求槽，由 auto 分组在上游自动分配",
@@ -1326,7 +1368,203 @@ function imageStreamLogSummary(result, size, model = DEFAULT_MODEL) {
   };
 }
 
+// Job record: one JSON file per paid run under JOBS_DIR. Each Images request
+// is written as "submitting" before it is sent, so a run that an Agent client
+// kills on a tool timeout still leaves evidence that the request may have been
+// accepted and billed. --job-status reads these files; it never sends a request.
+let activeJobRecord = null;
+
+function newJobId() {
+  return `${timestamp()}_${process.pid}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function writeJobRecord(record) {
+  record.updatedAt = new Date().toISOString();
+  try {
+    writeTextFileAtomic(record.path, `${JSON.stringify(record, null, 2)}\n`);
+  } catch (error) {
+    if (!record.writeWarned) console.warn(`WARNING: Unable to update the job record ${record.path}: ${error?.message || String(error)}`);
+    record.writeWarned = true;
+  }
+}
+
+function startJobRecord({ mode, model = null, outputDir = null }, jobsDir = JOBS_DIR) {
+  const id = newJobId();
+  mkdirSync(jobsDir, { recursive: true });
+  const record = {
+    id,
+    path: join(jobsDir, `${id}.json`),
+    version: PLUGIN_VERSION,
+    pid: process.pid,
+    mode,
+    model,
+    outputDir,
+    startedAt: new Date().toISOString(),
+    finished: false,
+    exitCode: null,
+    requests: [],
+  };
+  writeJobRecord(record);
+  return record;
+}
+
+function jobRequestStart(fields) {
+  const record = activeJobRecord;
+  if (!record) return null;
+  const entry = {
+    index: record.requests.length + 1,
+    state: "submitting",
+    ...fields,
+    prompt: truncateText(fields.prompt || "", 200),
+    startedAt: new Date().toISOString(),
+  };
+  record.requests.push(entry);
+  writeJobRecord(record);
+  return entry;
+}
+
+// Billing state from the request stage: an HTTP error response or a refused
+// connection costs nothing; a request that reached 88API and then failed is
+// treated as possibly or actually billed.
+function jobRequestEnd(entry, result) {
+  if (!entry || !activeJobRecord) return;
+  const error = result?.ok ? null : String(result?.error || "unknown error");
+  if (result?.ok) {
+    entry.state = "saved";
+    entry.path = result.path || null;
+    entry.dimensions = result.dimensions || null;
+  } else if (/request was not sent/.test(error)) {
+    entry.state = "not-sent";
+  } else if (/state is unknown/.test(error) || entry.state === "submitting") {
+    entry.state = "unknown";
+  } else if (entry.httpStatus >= 400) {
+    entry.state = "rejected";
+  } else if (isNoAutoRetryError(error)) {
+    entry.state = "billed-not-saved";
+  } else {
+    entry.state = "empty-result";
+  }
+  entry.error = error;
+  entry.noAutoRetry = !!error && isNoAutoRetryError(error);
+  entry.endedAt = new Date().toISOString();
+  writeJobRecord(activeJobRecord);
+}
+
+function jobRequestResponded(entry, status) {
+  if (!entry || !activeJobRecord) return;
+  entry.state = "responded";
+  entry.httpStatus = status;
+  writeJobRecord(activeJobRecord);
+}
+
+function finishJobRecord(exitCode) {
+  const record = activeJobRecord;
+  if (!record || record.finished) return;
+  record.finished = true;
+  record.exitCode = exitCode;
+  record.endedAt = new Date().toISOString();
+  // A run that stopped before sending anything (for example a rejected ratio)
+  // leaves nothing worth checking later.
+  if (record.requests.length === 0) {
+    try {
+      if (existsSync(record.path)) unlinkSync(record.path);
+    } catch {
+      // Leaving an empty record behind is harmless.
+    }
+    return;
+  }
+  writeJobRecord(record);
+}
+
+function processIsAlive(pid) {
+  if (!pid || pid === process.pid) return pid === process.pid;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+const JOB_STATE_MEANING = {
+  saved: "已出图并保存（已计费）",
+  "not-sent": "未发出，没有费用",
+  rejected: "88API 返回错误，未出图",
+  unknown: "[NO-AUTO-RETRY] 已发出、状态未知，可能已计费",
+  "billed-not-saved": "[NO-AUTO-RETRY] 已出图并计费，但结果没保存下来",
+  "empty-result": "88API 返回成功但没有图片，是否计费以 88API 使用日志为准",
+  interrupted: "[NO-AUTO-RETRY] 发出后进程被中断，状态未知，可能已计费",
+  running: "仍在进行中，请等待，不要重发",
+};
+
+// Interprets a job record. A request still marked "submitting"/"responded" in
+// a run that is no longer alive was cut off after it was sent: its cloud state
+// is unknown and it must not be resubmitted automatically.
+function summarizeJobRecord(record, { alive = processIsAlive(record?.pid) } = {}) {
+  const running = !record.finished && alive;
+  const requests = (record.requests || []).map((entry) => {
+    let state = entry.state;
+    if (state === "submitting" || state === "responded") state = running ? "running" : "interrupted";
+    return { ...entry, state, meaning: JOB_STATE_MEANING[state] || state, mayBeBilled: ["saved", "unknown", "billed-not-saved", "empty-result", "interrupted", "running"].includes(state) };
+  });
+  const count = (state) => requests.filter((entry) => entry.state === state).length;
+  return {
+    type: "88api-image-job",
+    id: record.id,
+    path: record.path,
+    status: running ? "running" : (record.finished ? "finished" : "interrupted"),
+    mode: record.mode,
+    model: record.model,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt || null,
+    exitCode: record.exitCode,
+    requestsSent: requests.filter((entry) => entry.state !== "not-sent").length,
+    saved: count("saved"),
+    notSent: count("not-sent"),
+    rejected: count("rejected"),
+    emptyResult: count("empty-result"),
+    unknown: count("unknown") + count("interrupted"),
+    billedNotSaved: count("billed-not-saved"),
+    running: count("running"),
+    noAutoRetry: requests.some((entry) => ["unknown", "interrupted", "billed-not-saved"].includes(entry.state)),
+    images: requests.filter((entry) => entry.state === "saved").map((entry) => ({ path: entry.path, dimensions: entry.dimensions || null })),
+    requests,
+  };
+}
+
+function readJobRecord(path) {
+  return { ...JSON.parse(readFileSync(path, "utf8")), path };
+}
+
+function listJobRecordPaths(jobsDir = JOBS_DIR) {
+  if (!existsSync(jobsDir)) return [];
+  return readdirSync(jobsDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .reverse()
+    .map((name) => join(jobsDir, name));
+}
+
+function resolveJobRecordPath(value, jobsDir = JOBS_DIR) {
+  if (existsSync(value)) return value;
+  const byId = join(jobsDir, `${value.replace(/\.json$/i, "")}.json`);
+  if (existsSync(byId)) return byId;
+  throw new Error(`Job record not found: ${value}`);
+}
+
 async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, options = {}) {
+  const job = jobRequestStart({ kind: "generation", model: options.model || DEFAULT_MODEL, size, prompt });
+  try {
+    const result = await generateImageViaImagesApiAttempt(apiKey, prompt, size, outputDir, { ...options, job });
+    jobRequestEnd(job, result);
+    return result;
+  } catch (error) {
+    jobRequestEnd(job, { ok: false, error: String(error?.message || error) });
+    throw error;
+  }
+}
+
+async function generateImageViaImagesApiAttempt(apiKey, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
   const preview = options.preview === true;
   const model = validateModel(options.model || DEFAULT_MODEL);
@@ -1344,6 +1582,7 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
       body: JSON.stringify(buildImagesGenerationBody(model, prompt, size, { preview })),
     }, REQUEST_TIMEOUT_MS);
     stage = "read-result";
+    jobRequestResponded(options.job, res.status);
     if (!res.ok) return { ok: false, elapsed: Date.now() - start, error: await parseErrorResponse(res) };
 
     const streamed = preview ? await consumeImageApiStream(res, { ...options, linkContext }) : null;
@@ -1418,6 +1657,24 @@ function loadSourceImages(imagePaths) {
 }
 
 async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDir, options = {}) {
+  const job = jobRequestStart({
+    kind: "edit",
+    model: options.model || DEFAULT_MODEL,
+    size,
+    prompt,
+    references: (sources || []).map((source) => source.imagePath || source.sourceName),
+  });
+  try {
+    const result = await editImageViaImagesApiAttempt(apiKey, sources, prompt, size, outputDir, { ...options, job });
+    jobRequestEnd(job, result);
+    return result;
+  } catch (error) {
+    jobRequestEnd(job, { ok: false, error: String(error?.message || error) });
+    throw error;
+  }
+}
+
+async function editImageViaImagesApiAttempt(apiKey, sources, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
   const model = validateModel(options.model || DEFAULT_MODEL);
   const start = Date.now();
@@ -1437,6 +1694,7 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
       body: buildImagesEditForm(model, prompt, size, sources),
     }, REQUEST_TIMEOUT_MS);
     stage = "read-result";
+    jobRequestResponded(options.job, res.status);
     if (!res.ok) {
       const raw = await res.text().catch(() => "");
       if (rawLogPath) saveTextArtifact(rawLogPath, raw);
@@ -3337,7 +3595,7 @@ async function runModelConfigSelfTest() {
   const persisted = loadConfig(configPath);
   const removedModelFallback = normalizeConfigShape({ ...legacy, model: "removed-image-model" }).config.model;
   const selectedWorker = getPrimaryWorker(persisted, { requireEnabled: true });
-  const configSummary = buildConfigSummary(persisted);
+  const configSummary = buildConfigSummary(persisted, { envKey: "", source: configPath });
   const replacedConfig = replaceWithSingleKey(persisted, "sk-test-replacement");
   const presetChecks = MODEL_INFO.flatMap(({ id }) => SUPPORTED_RATIOS.map((ratio) => {
     const size = resolveSize(id, ratio);
@@ -3494,6 +3752,87 @@ async function runResultDownloadSelfTest() {
   return 0;
 }
 
+// Covers the client-neutral config move (legacy copy kept and mirrored) and
+// the job record: requests cut off by a killed process read back as
+// interrupted and never retryable, and nothing here touches the real home dir.
+async function runConfigJobSelfTest() {
+  console.log("Config/job self-test: legacy config migration, legacy mirror, job record states, interrupted runs.");
+  const root = resolveOutputDir(join(tmpdir(), `88api-image-gen-config-job-test-${process.pid}-${Date.now()}`));
+  const newPath = join(root, "new", "image-gen.json");
+  const legacyPath = join(root, "legacy", "88api-image-gen-config.json");
+  const jobsDir = join(root, "jobs");
+  mkdirSync(dirname(legacyPath), { recursive: true });
+  writeFileSync(legacyPath, JSON.stringify({ apiKey: "sk-test-legacy", model: "gpt-image-2-4k" }), "utf8");
+  const checks = {};
+  const previousRecord = activeJobRecord;
+  try {
+    const migrated = loadConfig(newPath, [legacyPath]);
+    checks.migratedFromLegacy = existsSync(newPath) && existsSync(legacyPath)
+      && migrated.model === "gpt-image-2-4k"
+      && getPrimaryWorker(migrated)?.apiKey === "sk-test-legacy"
+      && loadedConfigSource === legacyPath;
+    saveConfig(replaceWithSingleKey(migrated, "sk-test-new"), newPath, [legacyPath]);
+    const mirrored = JSON.parse(readFileSync(legacyPath, "utf8"));
+    checks.legacyMirrored = getPrimaryWorker(loadConfig(newPath, [legacyPath]))?.apiKey === "sk-test-new"
+      && getPrimaryWorker(mirrored)?.apiKey === "sk-test-new"
+      && loadedConfigSource === newPath;
+    const envSummary = buildConfigSummary(migrated, { envKey: "sk-test-environment-key", source: newPath });
+    checks.envKeySummary = envSummary.Key预览 === previewKey("sk-test-environment-key")
+      && envSummary.Key来源.includes("API88_KEY")
+      && !JSON.stringify(envSummary).includes("sk-test-environment-key");
+
+    activeJobRecord = startJobRecord({ mode: "self-test", model: DEFAULT_MODEL }, jobsDir);
+    const saved = jobRequestStart({ kind: "generation", model: DEFAULT_MODEL, size: "2048x2048", prompt: "a" });
+    jobRequestResponded(saved, 200);
+    jobRequestEnd(saved, { ok: true, path: join(root, "a.png"), dimensions: "2048x2048" });
+    const notSent = jobRequestStart({ kind: "generation", prompt: "b" });
+    jobRequestEnd(notSent, { ok: false, error: "Images request was not sent: could not connect to 88API (ECONNREFUSED); no charge was made" });
+    const rejected = jobRequestStart({ kind: "generation", prompt: "c" });
+    jobRequestResponded(rejected, 400);
+    jobRequestEnd(rejected, { ok: false, error: "HTTP 400: bad prompt" });
+    const unknown = jobRequestStart({ kind: "edit", prompt: "d" });
+    jobRequestEnd(unknown, { ok: false, error: `${NO_AUTO_RETRY_PREFIX} Images edit request state is unknown (stage: submit): ECONNRESET` });
+    const billed = jobRequestStart({ kind: "generation", prompt: "e" });
+    jobRequestResponded(billed, 200);
+    jobRequestEnd(billed, { ok: false, error: `${NO_AUTO_RETRY_PREFIX} Images request completed and was billed, but reading the result failed (stage: read-result): terminated` });
+    jobRequestStart({ kind: "generation", prompt: "f" });
+    const recordPath = activeJobRecord.path;
+
+    // The run was "killed": still unfinished on disk and its process is gone.
+    const killed = summarizeJobRecord(readJobRecord(recordPath), { alive: false });
+    const states = killed.requests.map((entry) => entry.state).join(",");
+    checks.interruptedStates = killed.status === "interrupted"
+      && states === "saved,not-sent,rejected,unknown,billed-not-saved,interrupted"
+      && killed.saved === 1 && killed.notSent === 1 && killed.rejected === 1
+      && killed.unknown === 2 && killed.billedNotSaved === 1
+      && killed.requestsSent === 5
+      && killed.noAutoRetry === true
+      && killed.requests[5].mayBeBilled === true
+      && killed.requests[1].mayBeBilled === false
+      && killed.images.length === 1;
+    const live = summarizeJobRecord(readJobRecord(recordPath), { alive: true });
+    checks.runningWhileAlive = live.status === "running" && live.requests[5].state === "running";
+    checks.resolveById = resolveJobRecordPath(activeJobRecord.id, jobsDir) === recordPath
+      && listJobRecordPaths(jobsDir)[0] === recordPath;
+
+    finishJobRecord(0);
+    checks.finishedRecord = readJobRecord(recordPath).finished === true;
+    activeJobRecord = startJobRecord({ mode: "self-test-empty" }, jobsDir);
+    const emptyPath = activeJobRecord.path;
+    finishJobRecord(1);
+    checks.emptyRecordRemoved = !existsSync(emptyPath);
+  } finally {
+    activeJobRecord = previousRecord;
+  }
+  if (!Object.values(checks).every(Boolean) || Object.keys(checks).length !== 8) {
+    console.error("Config/job self-test FAILED.");
+    console.error(JSON.stringify(checks, null, 2));
+    return 1;
+  }
+  console.log("Config/job self-test OK.");
+  return 0;
+}
+
 async function runUnifiedSelfTest() {
   const tests = [
     ["adaptive", runAdaptiveSelfTest],
@@ -3502,6 +3841,7 @@ async function runUnifiedSelfTest() {
     ["image-stream", runImageStreamSelfTest],
     ["workflow", runWorkflowSelfTest],
     ["model-config", runModelConfigSelfTest],
+    ["config-job", runConfigJobSelfTest],
   ];
   const results = [];
   for (const [name, test] of tests) {
@@ -3544,6 +3884,9 @@ function parseArgs(argv) {
     else if (value === "--limit" && argv[i + 1]) args.flags.limit = Number.parseInt(argv[++i], 10);
     else if (value === "--output-dir" && argv[i + 1]) args.flags.outputDir = argv[++i];
     else if (value === "--retry-download" && argv[i + 1]) args.flags.retryDownload = argv[++i];
+    else if (value === "--job-status") {
+      args.flags.jobStatus = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : true;
+    } else if (value === "--json") args.flags.json = true;
     else if (value === "--concurrency" && argv[i + 1]) args.flags.concurrency = Number.parseInt(argv[++i], 10);
     else if (value === "--transport" && argv[i + 1]) args.flags.transport = argv[++i];
     else if (value === "--responses") args.flags.transport = "responses";
@@ -3653,6 +3996,8 @@ NAIL STRESS TEST
 
 TOOLS
   --retry-download path.pending-download.json    fetch an already generated and billed image from its saved result link; sends no new paid request
+  --job-status [job-id|record.json]               show what a paid run actually did (recent runs when omitted); sends no request
+  --json                                          print one machine-readable result line at the end of a paid run
   --resolve-size --model MODEL --aspect 16:9
   --self-test
   --self-test-adaptive
@@ -3671,6 +4016,8 @@ DEFAULTS
   API mode: OpenAI Images API only; no GPT text model required
   resolution: gpt-image-2=2K; gpt-image-2-4k=4K; gpt-image-2.5-flare / gpt-image-2.5-sunburst=2K preset
   output: ~/Pictures/88api-image-gen
+  config: ${CONFIG_PATH} (API88_CONFIG_DIR overrides the directory; API88_KEY overrides the saved Key)
+  job records: ${JOBS_DIR}
   scheduler: one configured Key with up to ${MAX_CONCURRENCY} local request slots; upstream allocation uses the auto group
   adaptive: on, concurrency ${DEFAULTS.concurrency}, retries ${MAX_RETRIES}, key cooldown ${DEFAULT_WORKER_COOLDOWN_MS / 1000}s
   notice: ${API_SIZE_LIMIT_NOTICE}
@@ -3685,6 +4032,15 @@ RATIOS
 SIZE MATRIX
   2K: 1:1 2048x2048, 3:2 2048x1360, 2:3 1360x2048, 4:3 2048x1536, 3:4 1536x2048, 16:9 2048x1152, 9:16 1152x2048, 2:1 2048x1024, 1:2 1024x2048, 7:4 2208x1264, 4:7 1264x2208
   4K: 1:1 2880x2880, 3:2 3520x2352, 2:3 2352x3520, 4:3 3264x2448, 3:4 2448x3264, 16:9 3840x2160, 9:16 2160x3840, 2:1 3840x1920, 1:2 1920x3840, 7:4 3808x2176, 4:7 2176x3808`);
+}
+
+function runModeName(flags) {
+  if (flags.workflowBatchEdit) return "workflow-batch-edit";
+  if (flags.nailStressTest) return "nail-stress-test";
+  if (flags.edit) return flags.batchEdit ? "batch-edit" : ((flags.images || []).length > 1 ? "multi-reference-edit" : "edit");
+  if (flags.batchFile || flags.batchInline) return "batch";
+  if (flags.repeat != null || (flags.count ?? 1) > 1) return "repeat";
+  return "generation";
 }
 
 function resolveGenerationParams(flags, modeConfig, config = {}) {
@@ -3759,6 +4115,24 @@ async function main() {
     try {
       const saved = await retrySavedDownload(flags.retryDownload);
       console.log(`[OK] ${saved.path} (${formatImageResult(saved)})`);
+    } catch (error) {
+      console.error(`ERROR: ${error?.message || String(error)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (flags.jobStatus) {
+    try {
+      if (flags.jobStatus === true) {
+        const recent = listJobRecordPaths().slice(0, JOB_LIST_LIMIT).map((path) => {
+          const { requests, ...summary } = summarizeJobRecord(readJobRecord(path));
+          return summary;
+        });
+        console.log(JSON.stringify({ jobsDir: JOBS_DIR, recent }, null, 2));
+      } else {
+        console.log(JSON.stringify(summarizeJobRecord(readJobRecord(resolveJobRecordPath(flags.jobStatus))), null, 2));
+      }
     } catch (error) {
       console.error(`ERROR: ${error?.message || String(error)}`);
       process.exitCode = 1;
@@ -3865,6 +4239,20 @@ async function main() {
   }
 
   const configuredWorkers = flags.dryRun ? [] : getEnabledWorkersOrExit(config);
+  if (!flags.dryRun) {
+    activeJobRecord = startJobRecord({ mode: runModeName(flags), model: effectiveModel(flags, config), outputDir: flags.outputDir || null });
+    console.log(`Job record: ${activeJobRecord.path} (if this run is interrupted, check it with --job-status ${activeJobRecord.id}; never resubmit blindly)`);
+    process.on("exit", (code) => {
+      finishJobRecord(code);
+      if (flags.json) {
+        try {
+          writeSync(1, `${JSON.stringify(summarizeJobRecord(activeJobRecord, { alive: false }))}\n`);
+        } catch {
+          // stdout already closed; the job record on disk still has the result.
+        }
+      }
+    });
+  }
 
   if (flags.workflowBatchEdit) {
     if (!flags.itemDir) {
@@ -4055,12 +4443,15 @@ async function main() {
       return;
     }
     console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
-    process.exit(await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
+    // Let the event loop drain: process.exit() right after fetch aborts on Windows
+    // (libuv UV_HANDLE_CLOSING assertion, exit code 127) and hides the real result.
+    process.exitCode = await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
       transport,
-    }));
+    });
+    return;
   }
 
   if (flags.batchInline) {
@@ -4075,12 +4466,13 @@ async function main() {
       return;
     }
     console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
-    process.exit(await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
+    process.exitCode = await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
       resize: flags.resize !== false,
       transport,
-    }));
+    });
+    return;
   }
 
   const prompt = prompts[0];
@@ -4095,13 +4487,14 @@ async function main() {
       return;
     }
     console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${modelResolution(model)})`);
-    process.exit(await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
+    process.exitCode = await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
       isVariation: true,
       resize: flags.resize !== false,
       transport,
-    }));
+    });
+    return;
   }
 
   const transport = resolveRunTransport(requestedTransport, false);
@@ -4111,13 +4504,14 @@ async function main() {
     return;
   }
   console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${modelResolution(model)})`);
-  process.exit(await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
+  process.exitCode = await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
     model,
     adaptive: flags.adaptive !== false,
     resize: flags.resize !== false,
     transport,
     preview,
-  }));
+  });
+  return;
 }
 
 main().catch((error) => {

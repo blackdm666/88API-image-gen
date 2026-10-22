@@ -1,7 +1,7 @@
 {
   "name": "88api-image-gen",
-  "version": "2.2.0",
-  "description": "来自 88api.ai Token 聚合站的 Codex 生图插件，支持 Image2、Image2 4K、Image 2.5 Flare/Sunburst、SSE 与批量工作流。",
+  "version": "2.3.0",
+  "description": "来自 88api.ai Token 聚合站的生图插件（Codex 版），支持 Image2、Image2 4K、Image 2.5 Flare/Sunburst、SSE 与批量工作流。",
   "author": {
     "name": "88api.ai"
   },

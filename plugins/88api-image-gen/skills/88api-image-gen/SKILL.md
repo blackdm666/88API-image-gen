@@ -1,21 +1,21 @@
 ---
 name: 88api-image-gen
-description: Generate or edit images through 88api.ai with gpt-image-2, gpt-image-2-4k, gpt-image-2.5-flare, or gpt-image-2.5-sunburst over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, workflow batch editing, or troubleshooting Codex Auto-mode sandbox and network-approval failures before an 88API request starts.
+description: Generate or edit images through 88api.ai with gpt-image-2, gpt-image-2-4k, gpt-image-2.5-flare, or gpt-image-2.5-sunburst over the OpenAI Images API. Use for text-to-image, reference-image editing, multi-reference composition, 4K requests, SSE previews, concurrent batches with one auto-group Key, repeated generation, workflow batch editing, checking interrupted paid runs, or troubleshooting Agent-client sandbox, timeout, and network-approval failures before an 88API request starts. Works in Codex, Claude Code, ZCode, DeepSeek Harness, and other Agent clients that can run local Node.js commands.
 ---
 
 # 88API-Image-Gen
 
-Use this skill for image generation and image editing through the installed 88API plugin. It supports four models, OpenAI Images generation/edit endpoints, partial-image SSE for one text-to-image task, one auto-group Key with concurrent request slots, batch tasks, and resumable workflows.
+Use this skill for image generation and image editing through 88API. It supports four models, OpenAI Images generation/edit endpoints, partial-image SSE for one text-to-image task, one auto-group Key with concurrent request slots, batch tasks, and resumable workflows. It runs in any Agent client that can execute a local `node` command (Node.js 18+).
 
 ## Resolve the runtime
 
-Resolve the directory containing this `SKILL.md`, then go up two levels to obtain `<PLUGIN_ROOT>`. Run:
+`<SKILL_DIR>` is the directory containing this `SKILL.md`; the CLI is bundled beside it. Run:
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" <arguments>
+node "<SKILL_DIR>/scripts/generate.mjs" <arguments>
 ```
 
-Do not assume a fixed marketplace cache path or copy the script elsewhere.
+Resolve `<SKILL_DIR>` to an absolute path from where this file was loaded. Do not assume a fixed marketplace or skills cache path, and do not copy the script elsewhere.
 
 ## Model selection
 
@@ -41,17 +41,19 @@ The legacy `--quality` flag is accepted for compatibility but cannot override th
 Run these read-only or no-charge commands when installation, configuration, model availability, or safety needs verification:
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --config-path
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --get-config
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --list-models
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --self-test
+node "<SKILL_DIR>/scripts/generate.mjs" --config-path
+node "<SKILL_DIR>/scripts/generate.mjs" --get-config
+node "<SKILL_DIR>/scripts/generate.mjs" --list-models
+node "<SKILL_DIR>/scripts/generate.mjs" --self-test
 ```
 
 If no Key is configured, stop before any paid request, but **do not tell the user to run PowerShell or copy a setup command**. Say: `还差一个 88API Key，我可以帮你一键配置。请到 https://88api.ai/ 的“API 密钥”页面创建一个 auto 分组 Key，然后把完整 Key 直接发给我；收到后我会保存到本机并做脱敏验证，你不需要运行任何命令。`
 
-Wait for the user to supply the Key. Then run `node "<PLUGIN_ROOT>/scripts/generate.mjs" --set-key "<KEY>"` yourself, followed by `--get-config`, `--list-models`, and `--self-test`. These checks do not submit a paid image request. After successful setup, automatically continue the user's original generation or editing request; do not ask them to restate it.
+Wait for the user to supply the Key. Then run `node "<SKILL_DIR>/scripts/generate.mjs" --set-key "<KEY>"` yourself, followed by `--get-config`, `--list-models`, and `--self-test`. These checks do not submit a paid image request. After successful setup, automatically continue the user's original generation or editing request; do not ask them to restate it.
 
-Treat the Key as sensitive. Never repeat it in replies, progress updates, or command-result summaries; never write it to source, project files, or logs. Report only the masked configuration state and config path. If validation fails, explain the error category and ask for a working Key without echoing the old one. The user should supply it only in a trusted Codex task, never in a GitHub Issue, public chat, repository file, or screenshot. Do not add multiple Keys: the `auto` group allocates concurrent requests upstream.
+Treat the Key as sensitive. Never repeat it in replies, progress updates, or command-result summaries; never write it to source, project files, or logs. Report only the masked configuration state and config path. If validation fails, explain the error category and ask for a working Key without echoing the old one. The user should supply it only in a trusted Agent conversation, never in a GitHub Issue, public chat, repository file, or screenshot. A Key sent in chat can remain in the client's conversation history; users who prefer not to send it can set the `API88_KEY` environment variable instead. Do not add multiple Keys: the `auto` group allocates concurrent requests upstream.
+
+The Key is saved to `~/.88api/image-gen.json`, shared by every Agent client on the machine. A Key saved by an older Codex-only version (`~/.codex/88api-image-gen-config.json`) is copied there automatically on first use and the old file is kept in sync. `API88_KEY`, when set, takes precedence and is never written to disk; `--get-config` shows which source is active.
 
 ## Prompt handling
 
@@ -66,13 +68,13 @@ Translate the request into one clear image instruction while preserving all expl
 Default 2K model or saved model:
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "<prompt>" --aspect 16:9
+node "<SKILL_DIR>/scripts/generate.mjs" --prompt "<prompt>" --aspect 16:9
 ```
 
 One-time 4K model:
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --model gpt-image-2-4k --prompt "<prompt>" --aspect 16:9
+node "<SKILL_DIR>/scripts/generate.mjs" --model gpt-image-2-4k --prompt "<prompt>" --aspect 16:9
 ```
 
 Only add `--preview` when the user explicitly asks for a real intermediate preview. Preview is supported for one text-to-image task, uses SSE partial-image output, and may increase usage or cost.
@@ -80,11 +82,11 @@ Only add `--preview` when the user explicitly asks for a real intermediate previ
 ## Edit and multi-reference edit
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --edit --image "<reference.png>" --prompt "<edit instruction>" --aspect 16:9
+node "<SKILL_DIR>/scripts/generate.mjs" --edit --image "<reference.png>" --prompt "<edit instruction>" --aspect 16:9
 ```
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --edit --model gpt-image-2-4k --image "<person.png>" --image "<product.png>" --prompt "<composition instruction>" --aspect 16:9
+node "<SKILL_DIR>/scripts/generate.mjs" --edit --model gpt-image-2-4k --image "<person.png>" --image "<product.png>" --prompt "<composition instruction>" --aspect 16:9
 ```
 
 All references are uploaded in order as multipart `image[]` fields to one Images edit request. Maximum: 10 references. Do not pre-compose them unless the user asks.
@@ -92,20 +94,20 @@ All references are uploaded in order as multipart `image[]` fields to one Images
 ## Multi-image and batch modes
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "<prompt>" --count 2 --concurrency 1
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --prompt "<prompt>" --repeat 2 --concurrency 1
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --batch-inline "<prompt 1>" "<prompt 2>" --concurrency 1
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --batch-edit --edit --image "<one.png>" --image "<two.png>" --prompt "<instruction>" --concurrency 1
+node "<SKILL_DIR>/scripts/generate.mjs" --prompt "<prompt>" --count 2 --concurrency 1
+node "<SKILL_DIR>/scripts/generate.mjs" --prompt "<prompt>" --repeat 2 --concurrency 1
+node "<SKILL_DIR>/scripts/generate.mjs" --batch-inline "<prompt 1>" "<prompt 2>" --concurrency 1
+node "<SKILL_DIR>/scripts/generate.mjs" --batch-edit --edit --image "<one.png>" --image "<two.png>" --prompt "<instruction>" --concurrency 1
 ```
 
 Use the single configured Key for all modes. Each count, repeat, batch item, or workflow item remains an independent paid request.
 
-For two or more outputs, prepare the complete task list first and invoke `generate.mjs` exactly once. Use `--count` or `--repeat` for one repeated prompt and `--batch-inline` or `--batch` for different prompts. Keep `--concurrency 1` when the user asks for sequential execution. Never launch one Node process per image: repeated shell launches can trigger repeated Codex Auto-mode network approvals and prevent the remaining tasks from starting.
+For two or more outputs, prepare the complete task list first and invoke `generate.mjs` exactly once. Use `--count` or `--repeat` for one repeated prompt and `--batch-inline` or `--batch` for different prompts. Keep `--concurrency 1` when the user asks for sequential execution. Never launch one Node process per image: repeated shell launches can trigger repeated client command or network approvals (for example Codex Auto mode) and prevent the remaining tasks from starting.
 
 ## Workflow batch edit
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --workflow-batch-edit --fixed-ref "<fixed.png>" --item-dir "<items>" --template-inline "<scene instruction>" --limit 1 --aspect 9:16 --concurrency 1 --dry-run
+node "<SKILL_DIR>/scripts/generate.mjs" --workflow-batch-edit --fixed-ref "<fixed.png>" --item-dir "<items>" --template-inline "<scene instruction>" --limit 1 --aspect 9:16 --concurrency 1 --dry-run
 ```
 
 Always dry-run first. The task count is item count multiplied by template count. After explicit confirmation, remove `--dry-run`. Workflow output includes `manifest.json`, `summary.csv`, `failures.json`, and `sessions.json`.
@@ -117,8 +119,8 @@ Always dry-run first. The task count is item count multiplied by template count.
 A dry-run does not grant network access to the later paid command. For workflow tasks, run at most one local dry-run, obtain the required confirmation, then start the entire paid batch with one `generate.mjs` invocation. Do not dry-run each image separately.
 
 ```powershell
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --model gpt-image-2-4k --prompt "<prompt>" --aspect 16:9 --preview --dry-run
-node "<PLUGIN_ROOT>/scripts/generate.mjs" --edit --model gpt-image-2-4k --image "<reference.png>" --prompt "<instruction>" --aspect 16:9 --dry-run
+node "<SKILL_DIR>/scripts/generate.mjs" --model gpt-image-2-4k --prompt "<prompt>" --aspect 16:9 --preview --dry-run
+node "<SKILL_DIR>/scripts/generate.mjs" --edit --model gpt-image-2-4k --image "<reference.png>" --prompt "<instruction>" --aspect 16:9 --dry-run
 ```
 
 ## Ratios and sizes
@@ -133,6 +135,16 @@ Unsupported ratios are rejected before any paid request. Use `--resolve-size` an
 - `gpt-image-2-4k` 3:4 → `2448x3264`.
 
 The CLI validates every resolved preset for 16-pixel alignment, maximum edge, aspect ratio, and total pixels before a paid request. The plugin may locally crop or resize an upstream result to its resolved preset dimensions.
+
+## Long runs and client command timeouts
+
+One paid request can legitimately take up to 10 minutes, and a batch longer. Many Agent clients stop a shell command much sooner, and a stopped process may already have had its request accepted and billed by 88API without printing `[NO-AUTO-RETRY]`. Therefore:
+
+- **Claude Code:** the Bash tool stops commands after 2 minutes by default and 10 minutes at most. Run every paid `generate.mjs` command with `run_in_background: true` and wait for its completion notification before reporting. Never run a paid command in the foreground with the default timeout. No-charge commands (`--get-config`, `--dry-run`, `--self-test`, `--job-status`) may run in the foreground.
+- **DeepSeek Harness:** its bash tool moves a command to the background after its timeout (120 seconds by default) instead of killing it. Wait for that background task to finish; do not start the same request again.
+- **ZCode, Cursor, Cline, Windsurf, VS Code, Gemini CLI, and other clients:** if the client offers background or long-running commands, use them for paid commands. Otherwise run the paid command once and wait.
+- **Any client:** each paid run prints `Job record: <path>` and a job id first. If the command was cut off, timed out, lost its output, or its result is unclear, do not resubmit. Run `node "<SKILL_DIR>/scripts/generate.mjs" --job-status <job id>` (or `--job-status` alone for recent runs). It sends no request and costs nothing, and reports each request as saved, not sent, rejected by 88API, running, or `[NO-AUTO-RETRY]` unknown / interrupted (may be billed). Report the saved images it lists and follow the retry rules below for the rest.
+- `--json` prints one machine-readable summary line at the end of a paid run (the same shape as `--job-status`). Use it when the client makes long text output hard to read.
 
 ## Codex Auto-mode network approval
 
@@ -179,6 +191,8 @@ Failures name the stage they reached. Report them to the user in these terms:
 - `[NO-AUTO-RETRY] ... state is unknown (stage: submit)`: the request may have reached 88API. Keep the unknown-state cost warning.
 - `[NO-AUTO-RETRY] ... completed and was billed, but reading the result failed (stage: read-result)`: the image was generated and billed; only the response transfer failed.
 - `[NO-AUTO-RETRY] Image was generated and billed, but downloading it failed ... (stage: download)`: the CLI already retried the download for free and saved the result link to a `*.pending-download.json` file named in the error. Offer to run `node <script> --retry-download "<that file>"` first; it sends no paid request and costs nothing. Suggest a new paid request only if that download also fails (result links can expire within about an hour).
+
+- `--job-status` state `interrupted` or `unknown`: the process stopped after the request was sent. Treat it exactly like `[NO-AUTO-RETRY] ... state is unknown`.
 
 Requests time out after 10 minutes, so slow channels that take several minutes are normal; do not describe a wait under 10 minutes as a failure.
 
