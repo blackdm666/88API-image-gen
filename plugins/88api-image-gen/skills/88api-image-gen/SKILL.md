@@ -173,6 +173,15 @@ This marker is not a permanent ban on future user requests. After reporting that
 
 Only clearly pre-acceptance transient failures are eligible for the bounded key-aware automatic retry policy.
 
+Failures name the stage they reached. Report them to the user in these terms:
+
+- `request was not sent`: the connection to 88API never opened. Nothing was submitted or billed, and the CLI may retry it automatically.
+- `[NO-AUTO-RETRY] ... state is unknown (stage: submit)`: the request may have reached 88API. Keep the unknown-state cost warning.
+- `[NO-AUTO-RETRY] ... completed and was billed, but reading the result failed (stage: read-result)`: the image was generated and billed; only the response transfer failed.
+- `[NO-AUTO-RETRY] Image was generated and billed, but downloading it failed ... (stage: download)`: the CLI already retried the download for free and saved the result link to a `*.pending-download.json` file named in the error. Offer to run `node <script> --retry-download "<that file>"` first; it sends no paid request and costs nothing. Suggest a new paid request only if that download also fails (result links can expire within about an hour).
+
+Requests time out after 10 minutes, so slow channels that take several minutes are normal; do not describe a wait under 10 minutes as a failure.
+
 ## Completion
 
 After generation or editing:
