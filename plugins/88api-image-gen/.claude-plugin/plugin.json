@@ -1,13 +1,23 @@
 {
   "name": "88api-image-gen",
   "displayName": "88API-Image-Gen",
-  "version": "2.3.0",
-  "description": "来自 88api.ai Token 聚合站的生图插件，支持 Image2、Image2 4K、Image 2.5 Flare/Sunburst、图生图、多参考图与批量工作流。Claude Code 与 ZCode 通用。",
+  "version": "3.0.0",
+  "description": "来自 88api.ai Token 聚合站的生图插件：一个插件调用 88API 全部生图模型（GPT Image、Gemini/Nano Banana、Grok、Seedream、Midjourney），按 88API 文档站的模型清单自动选择端点和参数。Claude Code 与 ZCode 通用。",
   "author": {
     "name": "88api.ai",
     "url": "https://88api.ai/"
   },
   "homepage": "https://88api.ai/",
   "repository": "https://github.com/blackdm666/88API-image-gen",
-  "keywords": ["88api", "image-generation", "gpt-image-2", "image-edit"]
+  "keywords": [
+    "88api",
+    "image-generation",
+    "gpt-image-2",
+    "nano-banana",
+    "gemini",
+    "grok",
+    "seedream",
+    "midjourney",
+    "image-edit"
+  ]
 }

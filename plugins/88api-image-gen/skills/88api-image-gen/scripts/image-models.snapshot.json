@@ -1,0 +1,1607 @@
+{
+  "schemaVersion": 1,
+  "apiBase": "https://api.88api.ai",
+  "docsBase": "https://88api.ai",
+  "source": "content/docs/zh/api/image/*.mdx frontmatter imageModels",
+  "models": [
+    {
+      "id": "gpt-image-2",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "通用图片生成与编辑，按张计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 4,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "gpt-image-2.5-flare",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "Image 2.5 快速版，按张计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 10,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "gpt-image-2.5-sunburst",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "Image 2.5 高画质版，按张计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 10,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "az-gpt-image-2",
+      "protocol": "openai-images",
+      "billing": "token",
+      "summary": "原生 OpenAI Images 参数，支持透明背景、输出格式和单次多张，按 token 计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 10,
+          "sources": [
+            "file"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 10,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high",
+          "auto"
+        ],
+        "background": [
+          "transparent",
+          "opaque",
+          "auto"
+        ],
+        "outputFormat": [
+          "png",
+          "webp",
+          "jpeg"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "stream": true,
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 50000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "az-gpt-image-2.5-flare",
+      "protocol": "openai-images",
+      "billing": "token",
+      "summary": "Image 2.5 快速版的原生参数版本，质量档位最高到 max，按 token 计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 10,
+          "sources": [
+            "file"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 10,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "auto"
+        ],
+        "background": [
+          "transparent",
+          "opaque",
+          "auto"
+        ],
+        "outputFormat": [
+          "png",
+          "webp",
+          "jpeg"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "stream": true,
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 50000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "az-gpt-image-2.5-sunburst",
+      "protocol": "openai-images",
+      "billing": "token",
+      "summary": "Image 2.5 高画质版的原生参数版本，质量档位最高到 max，按 token 计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image[]",
+          "maxImages": 10,
+          "sources": [
+            "file"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 10,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size",
+        "ratios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "21:9",
+          "2:1",
+          "1:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultRatio": "1:1",
+        "defaultResolution": "1K",
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "21:9": "1344x576",
+            "2:1": "1408x704",
+            "1:2": "704x1408"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "3:2": "2400x1600",
+            "2:3": "1600x2400",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "16:9": "2560x1440",
+            "9:16": "1440x2560",
+            "21:9": "3024x1296",
+            "2:1": "2880x1440",
+            "1:2": "1440x2880"
+          },
+          "4K": {
+            "1:1": "2880x2880",
+            "3:2": "3504x2336",
+            "2:3": "2336x3504",
+            "4:3": "3264x2448",
+            "3:4": "2448x3264",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "21:9": "3840x1648",
+            "2:1": "3840x1920",
+            "1:2": "1920x3840"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "auto"
+        ],
+        "background": [
+          "transparent",
+          "opaque",
+          "auto"
+        ],
+        "outputFormat": [
+          "png",
+          "webp",
+          "jpeg"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "stream": true,
+        "mask": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 50000000
+      },
+      "docs": "/zh/docs/api/image/openai-image/"
+    },
+    {
+      "id": "gemini-3.1-flash-image",
+      "protocol": "gemini-chat",
+      "billing": "request",
+      "summary": "Nano Banana 2，速度最快、价格最低，适合快速创作和日常修图。",
+      "generate": {
+        "endpoint": "/v1/chat/completions"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "upload": "json",
+          "field": "image_url",
+          "maxImages": 14,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "image_config",
+        "ratios": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1K",
+          "2K": "2K",
+          "4K": "4K"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "2:3": "848x1264",
+            "3:2": "1264x848",
+            "3:4": "896x1200",
+            "4:3": "1200x896",
+            "4:5": "928x1152",
+            "5:4": "1152x928",
+            "9:16": "768x1376",
+            "16:9": "1376x768",
+            "21:9": "1584x672"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "2:3": "1696x2528",
+            "3:2": "2528x1696",
+            "3:4": "1792x2400",
+            "4:3": "2400x1792",
+            "4:5": "1856x2304",
+            "5:4": "2304x1856",
+            "9:16": "1536x2752",
+            "16:9": "2752x1536",
+            "21:9": "3168x1344"
+          },
+          "4K": {
+            "1:1": "4096x4096",
+            "2:3": "3392x5056",
+            "3:2": "5056x3392",
+            "3:4": "3584x4800",
+            "4:3": "4800x3584",
+            "4:5": "3712x4608",
+            "5:4": "4608x3712",
+            "9:16": "3072x5504",
+            "16:9": "5504x3072",
+            "21:9": "6336x2688"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp",
+          "gif"
+        ],
+        "maxBytes": 7000000
+      },
+      "docs": "/zh/docs/api/image/gemini-image/"
+    },
+    {
+      "id": "gemini-nano-banana-2.1",
+      "protocol": "gemini-chat",
+      "billing": "request",
+      "summary": "Nano Banana 2 的升级版，兼顾速度与画质，人物一致性好。",
+      "generate": {
+        "endpoint": "/v1/chat/completions"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "upload": "json",
+          "field": "image_url",
+          "maxImages": 6,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "image_config",
+        "ratios": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1K",
+          "2K": "2K",
+          "4K": "4K"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "2:3": "848x1264",
+            "3:2": "1264x848",
+            "3:4": "896x1200",
+            "4:3": "1200x896",
+            "4:5": "928x1152",
+            "5:4": "1152x928",
+            "9:16": "768x1376",
+            "16:9": "1376x768",
+            "21:9": "1584x672"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "2:3": "1696x2528",
+            "3:2": "2528x1696",
+            "3:4": "1792x2400",
+            "4:3": "2400x1792",
+            "4:5": "1856x2304",
+            "5:4": "2304x1856",
+            "9:16": "1536x2752",
+            "16:9": "2752x1536",
+            "21:9": "3168x1344"
+          },
+          "4K": {
+            "1:1": "4096x4096",
+            "2:3": "3392x5056",
+            "3:2": "5056x3392",
+            "3:4": "3584x4800",
+            "4:3": "4800x3584",
+            "4:5": "3712x4608",
+            "5:4": "4608x3712",
+            "9:16": "3072x5504",
+            "16:9": "5504x3072",
+            "21:9": "6336x2688"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp",
+          "gif"
+        ],
+        "maxBytes": 7000000
+      },
+      "docs": "/zh/docs/api/image/gemini-image/"
+    },
+    {
+      "id": "gemini-3-pro-image",
+      "protocol": "gemini-chat",
+      "billing": "request",
+      "summary": "Nano Banana Pro，文字渲染最准，适合复杂构图和专业设计。",
+      "generate": {
+        "endpoint": "/v1/chat/completions"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "upload": "json",
+          "field": "image_url",
+          "maxImages": 14,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        }
+      ],
+      "size": {
+        "param": "image_config",
+        "ratios": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1K",
+          "2K": "2K",
+          "4K": "4K"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "2:3": "848x1264",
+            "3:2": "1264x848",
+            "3:4": "896x1200",
+            "4:3": "1200x896",
+            "4:5": "928x1152",
+            "5:4": "1152x928",
+            "9:16": "768x1376",
+            "16:9": "1376x768",
+            "21:9": "1584x672"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "2:3": "1696x2528",
+            "3:2": "2528x1696",
+            "3:4": "1792x2400",
+            "4:3": "2400x1792",
+            "4:5": "1856x2304",
+            "5:4": "2304x1856",
+            "9:16": "1536x2752",
+            "16:9": "2752x1536",
+            "21:9": "3168x1344"
+          },
+          "4K": {
+            "1:1": "4096x4096",
+            "2:3": "3392x5056",
+            "3:2": "5056x3392",
+            "3:4": "3584x4800",
+            "4:3": "4800x3584",
+            "4:5": "3712x4608",
+            "5:4": "4608x3712",
+            "9:16": "3072x5504",
+            "16:9": "5504x3072",
+            "21:9": "6336x2688"
+          }
+        }
+      },
+      "n": {
+        "max": 1
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp",
+          "gif"
+        ],
+        "maxBytes": 7000000
+      },
+      "docs": "/zh/docs/api/image/gemini-image/"
+    },
+    {
+      "id": "grok-imagine-image",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "快速出图，适合文字生图、创意草图和高频创作。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 3,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image",
+          "maxImages": 1,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "aspect_ratio+resolution",
+        "ratios": [
+          "auto",
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "2:1",
+          "1:2",
+          "19.5:9",
+          "9:19.5",
+          "20:9",
+          "9:20",
+          "21:9",
+          "5:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "defaultRatio": "auto",
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1k",
+          "2K": "2k"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "3:2": "1248x832",
+            "2:3": "832x1248",
+            "2:1": "1408x704",
+            "1:2": "704x1408",
+            "19.5:9": "1248x576",
+            "9:19.5": "576x1248",
+            "20:9": "1280x576",
+            "9:20": "576x1280",
+            "21:9": "1568x672",
+            "5:2": "1600x640"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "16:9": "2816x1584",
+            "9:16": "1584x2816",
+            "4:3": "2368x1776",
+            "3:4": "1776x2368",
+            "3:2": "2496x1664",
+            "2:3": "1664x2496",
+            "2:1": "2912x1456",
+            "1:2": "1456x2912",
+            "19.5:9": "2912x1344",
+            "9:19.5": "1344x2912",
+            "20:9": "3200x1440",
+            "9:20": "1440x3200",
+            "21:9": "3136x1344",
+            "5:2": "3200x1280"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false,
+        "stream": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/grok-image/"
+    },
+    {
+      "id": "grok-imagine-image-2.0",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "最新版 Grok 图像模型，构图与排版最讲究，出图较慢。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 3,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image",
+          "maxImages": 1,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "aspect_ratio+resolution",
+        "ratios": [
+          "auto",
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "2:1",
+          "1:2",
+          "19.5:9",
+          "9:19.5",
+          "20:9",
+          "9:20",
+          "21:9",
+          "5:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "defaultRatio": "auto",
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1k",
+          "2K": "2k"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "3:2": "1248x832",
+            "2:3": "832x1248",
+            "2:1": "1408x704",
+            "1:2": "704x1408",
+            "19.5:9": "1248x576",
+            "9:19.5": "576x1248",
+            "20:9": "1280x576",
+            "9:20": "576x1280",
+            "21:9": "1568x672",
+            "5:2": "1600x640"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "16:9": "2816x1584",
+            "9:16": "1584x2816",
+            "4:3": "2368x1776",
+            "3:4": "1776x2368",
+            "3:2": "2496x1664",
+            "2:3": "1664x2496",
+            "2:1": "2912x1456",
+            "1:2": "1456x2912",
+            "19.5:9": "2912x1344",
+            "9:19.5": "1344x2912",
+            "20:9": "3200x1440",
+            "9:20": "1440x3200",
+            "21:9": "3136x1344",
+            "5:2": "3200x1280"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "quality": [
+          "low",
+          "medium",
+          "auto"
+        ],
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false,
+        "stream": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/grok-image/"
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "高质量版，写实质感好，出图最快。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 3,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image",
+          "maxImages": 1,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "aspect_ratio+resolution",
+        "ratios": [
+          "auto",
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "2:1",
+          "1:2",
+          "19.5:9",
+          "9:19.5",
+          "20:9",
+          "9:20",
+          "21:9",
+          "5:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "defaultRatio": "auto",
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1k",
+          "2K": "2k"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "3:2": "1248x832",
+            "2:3": "832x1248",
+            "2:1": "1408x704",
+            "1:2": "704x1408",
+            "19.5:9": "1248x576",
+            "9:19.5": "576x1248",
+            "20:9": "1280x576",
+            "9:20": "576x1280",
+            "21:9": "1568x672",
+            "5:2": "1600x640"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "16:9": "2816x1584",
+            "9:16": "1584x2816",
+            "4:3": "2368x1776",
+            "3:4": "1776x2368",
+            "3:2": "2496x1664",
+            "2:3": "1664x2496",
+            "2:1": "2912x1456",
+            "1:2": "1456x2912",
+            "19.5:9": "2912x1344",
+            "9:19.5": "1344x2912",
+            "20:9": "3200x1440",
+            "9:20": "1440x3200",
+            "21:9": "3136x1344",
+            "5:2": "3200x1280"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false,
+        "stream": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/grok-image/"
+    },
+    {
+      "id": "grok-imagine-edit",
+      "aliasOf": "grok-imagine-image-quality",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "与 grok-imagine-image-quality 是同一个模型，既能编辑也能文生图。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 3,
+          "sources": [
+            "data-uri",
+            "url"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image",
+          "maxImages": 1,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "aspect_ratio+resolution",
+        "ratios": [
+          "auto",
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "2:1",
+          "1:2",
+          "19.5:9",
+          "9:19.5",
+          "20:9",
+          "9:20",
+          "21:9",
+          "5:2"
+        ],
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "defaultRatio": "auto",
+        "defaultResolution": "1K",
+        "resolutionValues": {
+          "1K": "1k",
+          "2K": "2k"
+        },
+        "pixels": {
+          "1K": {
+            "1:1": "1024x1024",
+            "16:9": "1280x720",
+            "9:16": "720x1280",
+            "4:3": "1152x864",
+            "3:4": "864x1152",
+            "3:2": "1248x832",
+            "2:3": "832x1248",
+            "2:1": "1408x704",
+            "1:2": "704x1408",
+            "19.5:9": "1248x576",
+            "9:19.5": "576x1248",
+            "20:9": "1280x576",
+            "9:20": "576x1280",
+            "21:9": "1568x672",
+            "5:2": "1600x640"
+          },
+          "2K": {
+            "1:1": "2048x2048",
+            "16:9": "2816x1584",
+            "9:16": "1584x2816",
+            "4:3": "2368x1776",
+            "3:4": "1776x2368",
+            "3:2": "2496x1664",
+            "2:3": "1664x2496",
+            "2:1": "2912x1456",
+            "1:2": "1456x2912",
+            "19.5:9": "2912x1344",
+            "9:19.5": "1344x2912",
+            "20:9": "3200x1440",
+            "9:20": "1440x3200",
+            "21:9": "3136x1344",
+            "5:2": "3200x1280"
+          }
+        }
+      },
+      "n": {
+        "max": 10
+      },
+      "options": {
+        "responseFormat": [
+          "b64_json",
+          "url"
+        ],
+        "mask": false,
+        "stream": false
+      },
+      "references": {
+        "formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "maxBytes": 20000000
+      },
+      "docs": "/zh/docs/api/image/grok-image/"
+    },
+    {
+      "id": "midjourney-v8.2",
+      "protocol": "openai-images",
+      "billing": "request",
+      "summary": "Midjourney V8.2 标准模式，每次请求返回 4 张。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "size": {
+        "param": "prompt-ar",
+        "ratios": [
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "21:9"
+        ],
+        "defaultRatio": "1:1"
+      },
+      "n": {
+        "max": 1,
+        "imagesPerRequest": 4
+      },
+      "docs": "/zh/docs/api/image/midjourney-proxy-image/"
+    },
+    {
+      "id": "midjourney-v8.2-fast",
+      "protocol": "openai-images",
+      "billing": "request",
+      "summary": "Midjourney V8.2 Fast 模式，每次请求返回 4 张。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "size": {
+        "param": "prompt-ar",
+        "ratios": [
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "21:9"
+        ],
+        "defaultRatio": "1:1"
+      },
+      "n": {
+        "max": 1,
+        "imagesPerRequest": 4
+      },
+      "docs": "/zh/docs/api/image/midjourney-proxy-image/"
+    },
+    {
+      "id": "midjourney-v8.2-turbo",
+      "protocol": "openai-images",
+      "billing": "request",
+      "summary": "Midjourney V8.2 Turbo 模式，每次请求返回 4 张。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "size": {
+        "param": "prompt-ar",
+        "ratios": [
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "3:2",
+          "2:3",
+          "21:9"
+        ],
+        "defaultRatio": "1:1"
+      },
+      "n": {
+        "max": 1,
+        "imagesPerRequest": 4
+      },
+      "docs": "/zh/docs/api/image/midjourney-proxy-image/"
+    },
+    {
+      "id": "doubao-seedream-5-0-pro",
+      "protocol": "openai-images",
+      "billing": "image",
+      "summary": "Seedream 5.0 Pro，文生图与图生图，1K / 2K 两档按张计费。",
+      "generate": {
+        "endpoint": "/v1/images/generations"
+      },
+      "edit": [
+        {
+          "endpoint": "/v1/images/generations",
+          "upload": "json",
+          "field": "images",
+          "maxImages": 14,
+          "sources": [
+            "url"
+          ]
+        },
+        {
+          "endpoint": "/v1/images/edits",
+          "upload": "multipart",
+          "field": "image",
+          "maxImages": 1,
+          "sources": [
+            "file"
+          ]
+        }
+      ],
+      "size": {
+        "param": "size-tier",
+        "ratios": [
+          "auto"
+        ],
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "resolutionValues": {
+          "1K": "1K",
+          "2K": "2K"
+        }
+      },
+      "n": {
+        "max": 4
+      },
+      "options": {
+        "responseFormat": [
+          "url",
+          "b64_json"
+        ]
+      },
+      "docs": "/zh/docs/api/image/seedream-5-pro/"
+    }
+  ]
+}

@@ -5,43 +5,31 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import {
+  describeEntry,
+  findEntry,
+  inferEntry,
+  loadCatalog,
+  loadSnapshotCatalog,
+  resolveRequestPlan,
+  sanitizeCatalog,
+  selectEditVariant,
+} from "./catalog.mjs";
+import { buildGeminiChatBody, decodeBase64Image, geminiStageError, parseGeminiChatResponse, postJsonOverHttps, safeErrorText } from "./gemini.mjs";
 
 const API_ROOT = "https://88api.ai";
-const IMAGES_GENERATIONS_URL = `${API_ROOT}/v1/images/generations`;
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
-const PLUGIN_VERSION = "2.3.0";
+const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
+const MODELS_URL = `${API_ROOT}/v1/models`;
+const PLUGIN_VERSION = "3.0.0";
 const DEFAULT_MODEL = "gpt-image-2";
-const MODEL_INFO = [
-  {
-    id: "gpt-image-2",
-    default: true,
-    resolution: "2K",
-    profile: "标准 2K 与兼容性优先",
-    recommendedFor: ["日常文生图", "常规参考图编辑", "批量生产"],
-  },
-  {
-    id: "gpt-image-2-4k",
-    default: false,
-    resolution: "4K",
-    profile: "4K 高分辨率输出",
-    recommendedFor: ["4K 海报", "大屏与印刷素材", "高分辨率参考图编辑"],
-  },
-  {
-    id: "gpt-image-2.5-flare",
-    default: false,
-    resolution: "2K",
-    profile: "Image 2.5 Flare（插件使用 2K 预设）",
-    recommendedFor: ["日常文生图", "参考图编辑", "批量生产"],
-  },
-  {
-    id: "gpt-image-2.5-sunburst",
-    default: false,
-    resolution: "2K",
-    profile: "Image 2.5 Sunburst（插件使用 2K 预设）",
-    recommendedFor: ["复杂构图", "参考图编辑", "产品设计"],
-  },
-];
-const MODELS = new Set(MODEL_INFO.map(({ id }) => id));
+// Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
+const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
+// Capability boundaries come from the 88API docs catalog (see catalog.mjs). The
+// bundled snapshot is used until main() loads the cached or live copy.
+let CATALOG = loadSnapshotCatalog();
+// Models the Key lists but the catalog does not document yet (see inferEntry).
+const INFERRED_ENTRIES = new Map();
 const DEFAULT_TRANSPORT = "images";
 const TRANSPORTS = new Set(["auto", "images"]);
 // Client-neutral config location. API88_CONFIG_DIR overrides the directory;
@@ -56,7 +44,11 @@ const ENV_API_KEY = String(process.env.API88_KEY || "").trim();
 // versions keep using the current Key.
 const LEGACY_CODEX_CONFIG_PATH = join(homedir(), ".codex", "88api-image-gen-config.json");
 const LEGACY_FHL_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.json");
-const LEGACY_CONFIG_PATHS = [LEGACY_CODEX_CONFIG_PATH, LEGACY_FHL_CONFIG_PATH];
+// 88API-Nano-Banana (no longer updated) kept its Key here; a Nano-only user is
+// migrated on first use. Its saved Gemini model carries over as the default.
+const LEGACY_NANO_CONFIG_PATHS = [join(CONFIG_DIR, "nano-banana.json"), join(homedir(), ".codex", "88api-nano-banana-config.json")];
+const LEGACY_CONFIG_PATHS = [LEGACY_CODEX_CONFIG_PATH, LEGACY_FHL_CONFIG_PATH, ...LEGACY_NANO_CONFIG_PATHS];
+const CATALOG_CACHE_PATH = join(CONFIG_DIR, "image-models.json");
 const JOB_LIST_LIMIT = 5;
 
 const MAX_GENERATION_COUNT = 9;
@@ -64,7 +56,6 @@ const MAX_REPEAT = 50;
 const MAX_CONCURRENCY = 10;
 const MAX_EDIT_COUNT = 4;
 const MAX_BATCH_PROMPTS = 20;
-const MAX_EDIT_SOURCES = 10;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 600_000;
@@ -79,51 +70,7 @@ const IMAGE_MIN_PIXELS = 655_360;
 const IMAGE_MAX_PIXELS = 8_294_400;
 const IMAGE_MAX_EDGE = 3_840;
 const IMAGE_MAX_RATIO = 3;
-const SUPPORTED_RATIOS = [
-  "1:1",
-  "3:2",
-  "2:3",
-  "4:3",
-  "3:4",
-  "16:9",
-  "9:16",
-  "2:1",
-  "1:2",
-  "7:4",
-  "4:7",
-];
-const SIZE_MATRIX = {
-  "2K": {
-    "1:1": "2048x2048",
-    "3:2": "2048x1360",
-    "2:3": "1360x2048",
-    "4:3": "2048x1536",
-    "3:4": "1536x2048",
-    "16:9": "2048x1152",
-    "9:16": "1152x2048",
-    "2:1": "2048x1024",
-    "1:2": "1024x2048",
-    "7:4": "2208x1264",
-    "4:7": "1264x2208",
-  },
-  "4K": {
-    "1:1": "2880x2880",
-    "3:2": "3520x2352",
-    "2:3": "2352x3520",
-    "4:3": "3264x2448",
-    "3:4": "2448x3264",
-    "16:9": "3840x2160",
-    "9:16": "2160x3840",
-    "2:1": "3840x1920",
-    "1:2": "1920x3840",
-    "7:4": "3808x2176",
-    "4:7": "2176x3808",
-  },
-};
-
 const DEFAULTS = {
-  quality: "2K",
-  ratio: "1:1",
   count: 1,
   concurrency: 3,
 };
@@ -263,8 +210,19 @@ function normalizeConfigShape(config) {
   }
 
   normalized.workers = normalizedWorkers;
-  normalized.model = MODELS.has(source.model) ? source.model : DEFAULT_MODEL;
+  const alias = legacyModelAlias(source.model);
+  if (alias) {
+    normalized.model = alias.model;
+    normalized.resolution = alias.resolution;
+  } else {
+    // A saved model the current catalog no longer lists falls back to the default.
+    normalized.model = modelEntry(source.model) ? source.model : DEFAULT_MODEL;
+  }
   if (source.model !== normalized.model) changed = true;
+  if (normalized.resolution !== undefined && !["1K", "2K", "4K"].includes(normalized.resolution)) {
+    delete normalized.resolution;
+    changed = true;
+  }
   if ("apiKey" in normalized) {
     delete normalized.apiKey;
     changed = true;
@@ -375,13 +333,12 @@ function buildConfigSummary(config, { envKey = ENV_API_KEY, source = loadedConfi
     上游分组: "请在 88API 控制台选择 auto；本地无法从 Key 反查分组",
     并发模式: "同一 Key 建立本地请求槽，由 auto 分组在上游自动分配",
     旧版备用Key记录: legacyExtraCount > 0 ? `${legacyExtraCount} 个（仅保留兼容，不参与请求；再次 --set-key 后清理）` : "无",
-    协议: "OpenAI Images API",
-    生成端点: IMAGES_GENERATIONS_URL,
-    编辑端点: IMAGES_EDITS_URL,
-    当前保存模型: MODELS.has(config?.model) ? config.model : DEFAULT_MODEL,
+    协议: "按模型清单选择：OpenAI Images API 或 Chat Completions（Gemini）",
+    模型清单: `${CATALOG.source}${CATALOG.fetchedAt ? `（${CATALOG.fetchedAt}）` : ""}`,
+    当前保存模型: modelEntry(config?.model) ? config.model : DEFAULT_MODEL,
+    保存的默认分辨率: config?.resolution || null,
     出厂默认模型: DEFAULT_MODEL,
-    当前模型分辨率: modelResolution(MODELS.has(config?.model) ? config.model : DEFAULT_MODEL),
-    可用模型: MODEL_INFO.map(({ id }) => id),
+    清单内模型: catalogModelIds(),
     快速模式: config?.quickMode || null,
     批量模式: config?.batchMode || null,
   };
@@ -414,73 +371,47 @@ function resolveRunTransport(value) {
   return "images";
 }
 
+function modelEntry(model) {
+  const id = String(model || "").trim();
+  return findEntry(CATALOG, id) || INFERRED_ENTRIES.get(id) || null;
+}
+
+function catalogModelIds() {
+  return CATALOG.models.map(({ id }) => id);
+}
+
 function validateModel(model) {
   const normalized = String(model || "").trim();
-  if (!MODELS.has(normalized)) {
-    throw new Error(`Unsupported model="${normalized}". Available models: ${[...MODELS].join(", ")}.`);
+  if (!modelEntry(normalized)) {
+    throw new Error(`Unknown model="${normalized}". It is not in the 88API model catalog; run --list-models to see the models your Key can use.`);
   }
   return normalized;
 }
 
-function modelInfo(model) {
-  const id = validateModel(model);
-  return MODEL_INFO.find((item) => item.id === id);
-}
-
-function modelResolution(model) {
-  return modelInfo(model)?.resolution || "2K";
+function legacyModelAlias(model) {
+  return LEGACY_MODEL_ALIASES[String(model || "").trim()] || null;
 }
 
 function effectiveModel(flags, config) {
-  return validateModel(flags?.model || config?.model || DEFAULT_MODEL);
+  const requested = flags?.model || config?.model || DEFAULT_MODEL;
+  return validateModel(legacyModelAlias(requested)?.model || requested);
 }
 
-function normalizeQuality(quality, model = DEFAULT_MODEL) {
-  return modelResolution(model);
+// A plain "WxH" string is still accepted by the request builders (self-tests and
+// older call sites); it behaves like an exact-pixel plan.
+function planOf(size) {
+  if (size && typeof size === "object") return size;
+  const pixels = size ? String(size) : null;
+  return { fields: pixels ? { size: pixels } : {}, pixels, resizeTo: pixels, promptSuffix: "", imageConfig: null, label: pixels || "model default", resolution: null };
 }
 
-function shouldWarnFixedQuality(quality, model = DEFAULT_MODEL) {
-  const normalized = String(quality || "").trim().toUpperCase();
-  return normalized && normalized !== modelResolution(model);
+function resizeTarget(size) {
+  return planOf(size).resizeTo || null;
 }
 
 function normalizeRatio(ratio) {
   const normalized = String(ratio || "").trim().toLowerCase();
   return RATIO_ALIASES[normalized] || normalized;
-}
-
-function parseRatioParts(ratio) {
-  const normalized = normalizeRatio(ratio);
-  const match = /^(\d+):(\d+)$/.exec(normalized);
-  if (!match) return null;
-  const left = Number(match[1]);
-  const right = Number(match[2]);
-  if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || left <= 0 || right <= 0) return null;
-  const divisor = gcd(left, right);
-  return { left: left / divisor, right: right / divisor, normalized };
-}
-
-function isSupportedRatio(ratio) {
-  const parsed = parseRatioParts(ratio);
-  return !!parsed && SUPPORTED_RATIOS.includes(`${parsed.left}:${parsed.right}`);
-}
-
-function ratioLabel(ratio) {
-  const canonical = normalizeRatio(ratio);
-  const alias = Object.entries(RATIO_ALIASES).find(([, value]) => value === canonical)?.[0];
-  return alias ? `${canonical} (${alias})` : canonical;
-}
-
-function supportedRatioText() {
-  return SUPPORTED_RATIOS.join(", ");
-}
-
-function resolveSize(model, ratio) {
-  const normalizedQuality = modelResolution(model);
-  const ratioParts = parseRatioParts(ratio);
-  const normalizedRatio = ratioParts ? `${ratioParts.left}:${ratioParts.right}` : normalizeRatio(ratio);
-  if (!normalizedQuality) return null;
-  return SIZE_MATRIX[normalizedQuality]?.[normalizedRatio] || null;
 }
 
 function imageSizeValidationError(size) {
@@ -786,17 +717,26 @@ function saveBase64Image(base64, outputDir, prefix, index = null, targetSize = n
   const buffer = Buffer.from(clean, "base64");
   const suffix = Math.random().toString(36).slice(2, 6);
   const numbered = index == null ? "" : `_${index}`;
-  const filename = `${prefix}_${timestamp()}${numbered}_${suffix}.png`;
+  const filename = `${prefix}_${timestamp()}${numbered}_${suffix}.${imageExtensionForBuffer(buffer)}`;
   const path = join(outputDir, filename);
   return savePngBuffer(path, buffer, targetSize);
+}
+
+// Grok 1K and most Gemini results are JPEG; name files by their real format.
+function imageExtensionForBuffer(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "jpg";
+  if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "webp";
+  if (buffer.length >= 6 && buffer.toString("ascii", 0, 3) === "GIF") return "gif";
+  return "png";
 }
 
 function savePngBuffer(path, buffer, targetSize = null) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, buffer);
-  const resizeInfo = ensurePngTargetSize(path, targetSize);
+  // The local crop/resize only handles PNG; other formats are kept as returned.
+  const resizeInfo = readPngDimensions(buffer) ? ensurePngTargetSize(path, targetSize) : null;
   const finalBuffer = resizeInfo?.resized ? readFileSync(path) : buffer;
-  const dimensions = readPngDimensions(finalBuffer);
+  const dimensions = readImageDimensions(finalBuffer);
   return {
     path,
     fileSize: `${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB`,
@@ -821,6 +761,7 @@ function formatImageResult(result) {
   if (result.dimensions) parts.push(result.dimensions);
   if (result.resized && result.originalDimensions) parts.push(`resized from ${result.originalDimensions}`);
   if (result.resizeError) parts.push(`resize warning: ${result.resizeError}`);
+  if (result.extraImages?.length) parts.push(`+${result.extraImages.length} more from the same request: ${result.extraImages.map((item) => item.path).join(", ")}`);
   return parts.join(", ");
 }
 
@@ -828,7 +769,7 @@ function inspectExistingImage(path) {
   if (!existsSync(path)) return null;
   const buffer = readFileSync(path);
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) return null;
-  const dimensions = readPngDimensions(buffer);
+  const dimensions = readImageDimensions(buffer);
   return {
     ok: true,
     path,
@@ -870,6 +811,41 @@ function readPngDimensions(buffer) {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
   };
+}
+
+function readJpegDimensions(buffer) {
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) return null;
+    const marker = buffer[offset + 1];
+    const length = buffer.readUInt16BE(offset + 2);
+    // SOF0-SOF15 except DHT (C4), JPG (C8) and DAC (CC) carry the frame size.
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + length;
+  }
+  return null;
+}
+
+function readWebpDimensions(buffer) {
+  if (buffer.length < 30) return null;
+  const chunk = buffer.toString("ascii", 12, 16);
+  if (chunk === "VP8X") return { width: 1 + buffer.readUIntLE(24, 3), height: 1 + buffer.readUIntLE(27, 3) };
+  if (chunk === "VP8 ") return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+  if (chunk === "VP8L") {
+    const bits = buffer.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  return null;
+}
+
+function readImageDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  const ext = imageExtensionForBuffer(buffer);
+  if (ext === "jpg") return readJpegDimensions(buffer);
+  if (ext === "webp") return readWebpDimensions(buffer);
+  return readPngDimensions(buffer);
 }
 
 function powershellSingleQuoted(value) {
@@ -1042,16 +1018,20 @@ function aspectPromptSuffixForSize(size) {
   return `请严格按照 ${aspect} 横版画幅生成最终图片，整张图片必须为 ${aspect} 横向构图，不要正方形，不要竖版。`;
 }
 
+// Exact-pixel models also get the aspect reminder appended to the prompt (as
+// before v3); Midjourney-style models get their --ar flag.
 function imageApiPrompt(prompt, size) {
-  const aspectPromptSuffix = aspectPromptSuffixForSize(size);
-  return [prompt, aspectPromptSuffix].filter(Boolean).join("\n\n");
+  const plan = planOf(size);
+  const aspectPromptSuffix = plan.resizeTo ? aspectPromptSuffixForSize(plan.pixels) : "";
+  const flagged = plan.promptSuffix && !/(^|\s)--ar\s/.test(prompt) ? `${prompt} ${plan.promptSuffix}` : prompt;
+  return [flagged, aspectPromptSuffix].filter(Boolean).join("\n\n");
 }
 
 function buildImagesGenerationBody(model, prompt, size, options = {}) {
   const body = {
     model: validateModel(model),
     prompt: imageApiPrompt(prompt, size),
-    size,
+    ...planOf(size).fields,
     n: 1,
   };
   if (options.preview === true) {
@@ -1061,63 +1041,93 @@ function buildImagesGenerationBody(model, prompt, size, options = {}) {
   return body;
 }
 
+function editVariantFor(model, sources) {
+  return selectEditVariant(modelEntry(model), sources.map((source) => ({ kind: source.url ? "url" : "file" })));
+}
+
 function buildImagesEditForm(model, prompt, size, sources, options = {}) {
+  const variant = options.variant || editVariantFor(model, sources);
   const form = new FormData();
   form.append("model", validateModel(model));
   form.append("prompt", imageApiPrompt(prompt, size));
-  form.append("size", size);
+  for (const [key, value] of Object.entries(planOf(size).fields)) form.append(key, String(value));
   form.append("n", "1");
   for (const source of sources) {
     const sourceBuffer = options.redactImageData ? Buffer.from(`<redacted ${source.sourceBuffer.length} bytes>`) : source.sourceBuffer;
     const blob = new Blob([sourceBuffer], { type: source.mimeType || "image/png" });
-    form.append("image[]", blob, source.sourceName || `reference.${source.ext || "png"}`);
+    form.append(variant.field, blob, source.sourceName || `reference.${source.ext || "png"}`);
   }
   return form;
+}
+
+// JSON edit request: references go as data URIs or public URLs in one field
+// (Grok and az use /v1/images/edits; Seedream puts URLs on /v1/images/generations).
+function buildImagesEditJson(model, prompt, size, sources, variant, options = {}) {
+  const items = sources.map((source) => source.url
+    || `data:${source.mimeType || "image/png"};base64,${options.redactImageData ? `<${source.sourceBuffer.length} bytes omitted>` : source.sourceBuffer.toString("base64")}`);
+  return {
+    model: validateModel(model),
+    prompt: imageApiPrompt(prompt, size),
+    ...planOf(size).fields,
+    n: 1,
+    [variant.field]: variant.field.endsWith("s") ? items : items[0],
+  };
 }
 
 function dryRunReferenceSummary(imagePaths = []) {
   return imagePaths.map((imagePath, index) => {
     const source = loadSourceImage(imagePath);
     if (!source.ok) throw new Error(source.error);
-    return {
-      index: index + 1,
-      name: source.sourceName,
-      mimeType: source.mimeType,
-      bytes: source.sourceBuffer.length,
-      content: "<binary omitted>",
-    };
+    return source.url
+      ? { index: index + 1, url: source.url }
+      : { index: index + 1, name: source.sourceName, mimeType: source.mimeType, bytes: source.sourceBuffer.length, content: "<binary omitted>" };
   });
 }
 
 function buildDryRunPlan({ mode, model, size, aspect, prompts = [], imagePaths = [], count = 1, concurrency = 1, preview = false }) {
+  const entry = modelEntry(model);
+  const plan = planOf(size);
   const editing = imagePaths.length > 0;
-  const endpoint = editing ? IMAGES_EDITS_URL : IMAGES_GENERATIONS_URL;
-  const references = editing ? dryRunReferenceSummary(imagePaths) : [];
   const samplePrompt = prompts[0] || "";
-  const request = editing
-    ? {
-        model,
-        prompt: imageApiPrompt(samplePrompt, size),
-        size,
-        n: 1,
-        "image[]": references,
-      }
-    : buildImagesGenerationBody(model, samplePrompt, size, { preview });
+  let endpoint;
+  let contentType = "application/json";
+  let request;
+  if (entry.protocol === "gemini-chat") {
+    endpoint = CHAT_COMPLETIONS_URL;
+    const sources = editing ? imagePaths.map((path) => loadSourceImage(path)) : [];
+    if (editing) editVariantFor(model, sources);
+    request = buildGeminiChatBody(model, samplePrompt, plan, sources, { redactImageData: true });
+  } else if (editing) {
+    const sources = imagePaths.map((path) => loadSourceImage(path));
+    const variant = editVariantFor(model, sources);
+    endpoint = `${API_ROOT}${variant.endpoint}`;
+    if (variant.upload === "multipart") {
+      contentType = "multipart/form-data";
+      request = { model, prompt: imageApiPrompt(samplePrompt, plan), ...plan.fields, n: 1, [variant.field]: dryRunReferenceSummary(imagePaths) };
+    } else {
+      request = buildImagesEditJson(model, samplePrompt, plan, sources, variant, { redactImageData: true });
+    }
+  } else {
+    endpoint = `${API_ROOT}${entry.generate.endpoint}`;
+    request = buildImagesGenerationBody(model, samplePrompt, plan, { preview });
+  }
   return {
     dryRun: true,
     paidApiCalled: false,
-    protocol: "OpenAI Images API",
+    protocol: entry.protocol === "gemini-chat" ? "OpenAI Chat Completions (Gemini image)" : "OpenAI Images API",
     method: "POST",
     endpoint,
     mode,
     model,
-    resolution: modelResolution(model),
+    documented: !entry.inferred,
+    resolution: plan.resolution,
     aspect,
-    size,
+    size: plan.label,
+    imagesPerRequest: entry.n.imagesPerRequest || 1,
     taskCount: count,
     concurrency,
     request: {
-      headers: { Authorization: "Bearer <redacted>", "Content-Type": editing ? "multipart/form-data" : "application/json" },
+      headers: { Authorization: "Bearer <redacted>", "Content-Type": contentType },
       body: request,
     },
   };
@@ -1201,6 +1211,28 @@ async function imageApiResultBase64(data, linkContext = {}) {
   const item = Array.isArray(data?.data) ? data.data.find((entry) => typeof entry?.url === "string" && entry.url) : null;
   if (!item?.url) return "";
   return downloadImageResult(item.url, linkContext);
+}
+
+// Every image of an Images response, in order (Midjourney always returns 4).
+async function imageApiResultAllBase64(data, linkContext = {}) {
+  const items = Array.isArray(data?.data) ? data.data : [];
+  const results = [];
+  for (const item of items) {
+    const base64 = item?.b64_json || item?.base64 || item?.image?.b64_json;
+    if (typeof base64 === "string" && base64.trim()) results.push(base64);
+    else if (typeof item?.url === "string" && item.url) results.push(await downloadImageResult(item.url, linkContext));
+  }
+  return results;
+}
+
+// Saves all images of one response; the first is the result, the rest are listed
+// as extraImages so a 4-image Midjourney request keeps every picture.
+function saveImageSet(base64List, saveFirst, outputDir, prefix, targetSize) {
+  const [first, ...rest] = base64List;
+  const saved = first ? saveFirst(first) : null;
+  if (!saved) return null;
+  const extraImages = rest.map((base64, index) => saveBase64Image(base64, outputDir, prefix, index + 2, targetSize)).filter(Boolean);
+  return extraImages.length ? { ...saved, extraImages } : saved;
 }
 
 // Fetches an image whose download failed earlier, from its saved link file.
@@ -1564,15 +1596,68 @@ async function generateImageViaImagesApiOnce(apiKey, prompt, size, outputDir, op
   }
 }
 
+// Gemini image models: one Chat Completions request returns one image, embedded
+// in the message content. Shared by generation and editing.
+async function geminiImageAttempt(apiKey, prompt, size, sources, outputDir, options = {}) {
+  const model = validateModel(options.model || DEFAULT_MODEL);
+  const plan = planOf(size);
+  const editing = sources.length > 0;
+  const label = editing ? "Gemini edit" : "Gemini";
+  const prefix = editing ? "edit" : "img";
+  const start = Date.now();
+  const heartbeat = setInterval(() => {
+    console.log(`[wait] 88API is still working on the ${model} request (${Math.round((Date.now() - start) / 1000)}s)...`);
+  }, 15_000);
+  heartbeat.unref();
+  let response;
+  try {
+    response = await postJsonOverHttps(CHAT_COMPLETIONS_URL, buildGeminiChatBody(model, prompt, plan, sources), apiKey, {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      userAgent: `88api-image-gen/${PLUGIN_VERSION}`,
+      onResponse: (status) => jobRequestResponded(options.job, status),
+    });
+  } catch (error) {
+    return { ok: false, elapsed: Date.now() - start, error: geminiStageError(label, error), sourceName: summarizeSources(sources) };
+  } finally {
+    clearInterval(heartbeat);
+  }
+  const elapsed = Date.now() - start;
+  if (response.status < 200 || response.status >= 300) {
+    return { ok: false, elapsed, error: `HTTP ${response.status}: ${safeErrorText(response.raw) || "unknown error"}`, sourceName: summarizeSources(sources) };
+  }
+  try {
+    const parsed = parseGeminiChatResponse(JSON.parse(response.raw || "{}"));
+    if (!parsed.image) {
+      const text = parsed.text ? ` Text reply: ${parsed.text.slice(0, 500)}` : "";
+      return { ok: false, elapsed, error: `${NO_AUTO_RETRY_PREFIX} ${label} request completed (it may be billed) but returned no image.${text}`, sourceName: summarizeSources(sources) };
+    }
+    const linkContext = { outputDir: options.savePath ? dirname(options.savePath) : outputDir, prefix, savePath: options.savePath || null, model };
+    const base64 = parsed.image.type === "url"
+      ? await downloadImageResult(parsed.image.url, linkContext)
+      : decodeBase64Image(parsed.image.data).toString("base64");
+    const saved = options.savePath
+      ? saveBase64ImageToPath(base64, options.savePath, null)
+      : saveBase64Image(base64, outputDir, prefix, options.saveIndex ?? null, null);
+    if (!saved) return { ok: false, elapsed, error: `${NO_AUTO_RETRY_PREFIX} ${label} returned image data that could not be saved`, sourceName: summarizeSources(sources) };
+    return { ok: true, elapsed: Date.now() - start, model, resolution: plan.resolution, transport: "chat-completions", ...saved, sourceName: summarizeSources(sources) };
+  } catch (error) {
+    if (error instanceof ImageResultDownloadError) return { ok: false, elapsed, error: error.message, sourceName: summarizeSources(sources) };
+    return { ok: false, elapsed, error: `${NO_AUTO_RETRY_PREFIX} ${label} request completed and was billed, but reading the result failed (stage: read-result): ${error?.message || error}`, sourceName: summarizeSources(sources) };
+  }
+}
+
 async function generateImageViaImagesApiAttempt(apiKey, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
   const preview = options.preview === true;
   const model = validateModel(options.model || DEFAULT_MODEL);
+  const entry = modelEntry(model);
+  if (entry.protocol === "gemini-chat") return geminiImageAttempt(apiKey, prompt, size, [], outputDir, options);
+  const targetSize = resize ? resizeTarget(size) : null;
   const start = Date.now();
-  const linkContext = { outputDir, prefix: "img", targetSize: resize ? size : null, model };
+  const linkContext = { outputDir, prefix: "img", targetSize, model };
   let stage = "submit";
   try {
-    const res = await requestWithTimeout(IMAGES_GENERATIONS_URL, {
+    const res = await requestWithTimeout(`${API_ROOT}${entry.generate.endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1587,8 +1672,8 @@ async function generateImageViaImagesApiAttempt(apiKey, prompt, size, outputDir,
 
     const streamed = preview ? await consumeImageApiStream(res, { ...options, linkContext }) : null;
     const data = preview ? null : await res.json();
-    const base64 = preview ? streamed?.base64 : await imageApiResultBase64(data, linkContext);
-    const saved = saveBase64Image(base64, outputDir, "img", null, resize ? size : null);
+    const images = preview ? [streamed?.base64].filter(Boolean) : await imageApiResultAllBase64(data, linkContext);
+    const saved = saveImageSet(images, (base64) => saveBase64Image(base64, outputDir, "img", null, targetSize), outputDir, "img", targetSize);
     const elapsed = Date.now() - start;
     if (!saved) {
       return {
@@ -1602,7 +1687,7 @@ async function generateImageViaImagesApiAttempt(apiKey, prompt, size, outputDir,
     if (options.rawLogPath && streamed) {
       saveTextArtifact(options.rawLogPath, JSON.stringify(imageStreamLogSummary(streamed, size, model), null, 2));
     }
-    return { ok: true, elapsed, model, resolution: modelResolution(model), transport: preview ? "images-stream" : "images", ...saved, previewPath: streamed?.previewPath || null };
+    return { ok: true, elapsed, model, resolution: planOf(size).resolution, transport: preview ? "images-stream" : "images", ...saved, previewPath: streamed?.previewPath || null };
   } catch (error) {
     return {
       ok: false,
@@ -1618,6 +1703,10 @@ async function generateImage(apiKey, prompt, size, outputDir, options = {}) {
 }
 
 function loadSourceImage(imagePath) {
+  // Public URLs are passed through for models whose JSON edit accepts them.
+  if (/^https?:\/\//i.test(String(imagePath))) {
+    return { ok: true, url: String(imagePath), imagePath, sourceName: String(imagePath) };
+  }
   if (!existsSync(imagePath)) {
     return { ok: false, elapsed: 0, error: `File does not exist: ${imagePath}`, sourceName: basename(imagePath) };
   }
@@ -1677,21 +1766,28 @@ async function editImageViaImagesApiOnce(apiKey, sources, prompt, size, outputDi
 async function editImageViaImagesApiAttempt(apiKey, sources, prompt, size, outputDir, options = {}) {
   const resize = options.resize !== false;
   const model = validateModel(options.model || DEFAULT_MODEL);
+  if (modelEntry(model).protocol === "gemini-chat") return geminiImageAttempt(apiKey, prompt, size, sources, outputDir, options);
+  const targetSize = resize ? resizeTarget(size) : null;
+  const variant = editVariantFor(model, sources);
   const start = Date.now();
   const sourceName = summarizeSources(sources);
   const rawLogPath = options.rawLogPath || null;
   const linkContext = options.savePath
-    ? { outputDir: dirname(options.savePath), prefix: "edit", savePath: options.savePath, targetSize: resize ? size : null, model }
-    : { outputDir, prefix: "edit", targetSize: resize ? size : null, model };
+    ? { outputDir: dirname(options.savePath), prefix: "edit", savePath: options.savePath, targetSize, model }
+    : { outputDir, prefix: "edit", targetSize, model };
   let stage = "submit";
   try {
-    const res = await requestWithTimeout(IMAGES_EDITS_URL, {
+    const json = variant.upload === "json";
+    const res = await requestWithTimeout(`${API_ROOT}${variant.endpoint}`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${apiKey}`,
+        ...(json ? { "Content-Type": "application/json" } : {}),
       },
-      body: buildImagesEditForm(model, prompt, size, sources),
+      body: json
+        ? JSON.stringify(buildImagesEditJson(model, prompt, size, sources, variant))
+        : buildImagesEditForm(model, prompt, size, sources, { variant }),
     }, REQUEST_TIMEOUT_MS);
     stage = "read-result";
     jobRequestResponded(options.job, res.status);
@@ -1703,13 +1799,13 @@ async function editImageViaImagesApiAttempt(apiKey, sources, prompt, size, outpu
 
     const data = await res.json();
     if (rawLogPath) saveTextArtifact(rawLogPath, JSON.stringify(imageApiLogSummary(data, model), null, 2));
-    const base64 = await imageApiResultBase64(data, linkContext);
-    const saved = options.savePath
-      ? saveBase64ImageToPath(base64, options.savePath, resize ? size : null)
-      : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, resize ? size : null);
+    const images = await imageApiResultAllBase64(data, linkContext);
+    const saved = saveImageSet(images, (base64) => (options.savePath
+      ? saveBase64ImageToPath(base64, options.savePath, targetSize)
+      : saveBase64Image(base64, outputDir, "edit", options.saveIndex ?? null, targetSize)), outputDir, "edit", targetSize);
     const elapsed = Date.now() - start;
     if (!saved) return { ok: false, elapsed, error: "Images API response did not contain an edited image", sourceName };
-    return { ok: true, elapsed, model, resolution: modelResolution(model), ...saved, sourceName };
+    return { ok: true, elapsed, model, resolution: planOf(size).resolution, ...saved, sourceName };
   } catch (error) {
     return {
       ok: false,
@@ -2144,13 +2240,14 @@ async function editImage(workers, imagePaths, prompt, size, outputDir, count = 1
   const { sources, sourceName } = sourceGroup;
 
   if (!silent) {
+    const sizeOf = (source) => (source.url ? "URL" : `${(source.sourceBuffer.length / 1024 / 1024).toFixed(2)}MB`);
     if (sources.length === 1) {
-      console.log(`Loaded ${sources[0].sourceName} (${(sources[0].sourceBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
+      console.log(`Loaded ${sources[0].sourceName} (${sizeOf(sources[0])})`);
     } else {
-      const totalMb = sources.reduce((sum, item) => sum + item.sourceBuffer.length, 0) / 1024 / 1024;
-      console.log(`Loaded ${sources.length} source images (${totalMb.toFixed(2)}MB total)`);
+      const totalMb = sources.reduce((sum, item) => sum + (item.sourceBuffer?.length || 0), 0) / 1024 / 1024;
+      console.log(`Loaded ${sources.length} source images (${totalMb.toFixed(2)}MB of local files)`);
       for (const source of sources) {
-        console.log(`- ${source.sourceName} (${(source.sourceBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
+        console.log(`- ${source.sourceName} (${sizeOf(source)})`);
       }
     }
   }
@@ -2478,7 +2575,7 @@ function writeNailStressArtifacts(outputRoot, records, report, metadata, options
 function printNailStressDryRun(personaPath, productDir, limit, size, outputRoot, selection, tasks, concurrency, model) {
   console.log("Nail stress test dry run");
   console.log(`Endpoint: ${IMAGES_EDITS_URL}`);
-  console.log(`Model: ${model} (${modelResolution(model)})`);
+  console.log(`Model: ${model} (${size})`);
   console.log("Authorization: Bearer <redacted>");
   console.log("Reference image content: <binary omitted>");
   console.log(`Persona: ${personaPath}`);
@@ -2901,7 +2998,7 @@ function workflowMissingQueue(tasks, liveResults) {
 function printWorkflowDryRun(fixedRefPaths, itemDir, limit, size, outputRoot, selection, templates, tasks, concurrency, model) {
   console.log("Workflow batch edit dry run");
   console.log(`Endpoint: ${IMAGES_EDITS_URL}`);
-  console.log(`Model: ${model} (${modelResolution(model)})`);
+  console.log(`Model: ${model} (${size})`);
   console.log("Authorization: Bearer <redacted>");
   console.log("Reference image content: <binary omitted>");
   console.log(`Fixed refs: ${fixedRefPaths.length}`);
@@ -2967,7 +3064,7 @@ async function runWorkflowBatchEdit(workers, options) {
     repairPasses,
     transport,
     model,
-    resolution: modelResolution(model),
+    resolution: planOf(size).resolution,
   };
 
   if (dryRun) {
@@ -3119,7 +3216,7 @@ async function runWorkflowSelfTest() {
   const records = buildWorkflowRecords(tasks, liveResults);
   const artifacts = writeWorkflowArtifacts(outputRoot, records, noOpQueueReport([], outputRoot), {
     workflow: "self-test",
-    model: "gpt-image-2-4k",
+    model: "gpt-image-2",
     resolution: "4K",
     size: "3840x2160",
     aspect: "16:9",
@@ -3134,7 +3231,7 @@ async function runWorkflowSelfTest() {
     && repairQueue.length === 1
     && records[0].status === "success"
     && records[1].errorClass === "timeout_524"
-    && manifest.metadata?.model === "gpt-image-2-4k"
+    && manifest.metadata?.model === "gpt-image-2"
     && manifest.metadata?.resolution === "4K"
     && manifest.metadata?.size === "3840x2160"
     && existsSync(artifacts.manifestPath)
@@ -3183,7 +3280,7 @@ async function runNailStressTest(workers, options) {
     sceneCount: NAIL_STRESS_SCENES.length,
     transport,
     model,
-    resolution: modelResolution(model),
+    resolution: planOf(size).resolution,
   };
 
   if (dryRun) {
@@ -3468,31 +3565,51 @@ async function runImagesApiSelfTest() {
       ext: "jpg",
     },
   ];
-  const payloads = MODEL_INFO.map(({ id }) => {
-    const size = resolveSize(id, "16:9");
-    const generation = buildImagesGenerationBody(id, "mock generation prompt", size);
-    const form = buildImagesEditForm(id, "mock edit prompt", size, sources);
-    const imageEntries = [...form.entries()].filter(([key]) => key === "image[]");
+  // Every catalog model: the plan's fields must land in the request it builds.
+  const payloads = CATALOG.models.map((entry) => {
+    const id = entry.id;
+    const plan = resolveRequestPlan(entry, { ratio: entry.size.ratios.includes("16:9") ? "16:9" : undefined });
+    if (entry.protocol === "gemini-chat") {
+      const body = buildGeminiChatBody(id, "mock generation prompt", plan, sources.slice(0, 1));
+      return {
+        id,
+        size: plan.label,
+        ok: body.model === id
+          && body.extra_body?.google?.image_config?.aspect_ratio === "16:9"
+          && body.messages[0].content[1]?.image_url?.url.startsWith("data:image/png;base64,"),
+      };
+    }
+    const generation = buildImagesGenerationBody(id, "mock generation prompt", plan);
+    const fieldsOk = Object.entries(plan.fields).every(([key, value]) => generation[key] === value);
+    const multipart = (entry.edit || []).find((variant) => variant.upload === "multipart");
+    let editOk = true;
+    if (multipart) {
+      const refs = sources.slice(0, multipart.maxImages);
+      const form = buildImagesEditForm(id, "mock edit prompt", plan, refs, { variant: multipart });
+      const imageEntries = [...form.entries()].filter(([key]) => key === multipart.field);
+      editOk = form.get("model") === id
+        && form.get("n") === "1"
+        && Object.entries(plan.fields).every(([key, value]) => form.get(key) === String(value))
+        && String(form.get("prompt")).includes("mock edit prompt")
+        && imageEntries.length === refs.length
+        && imageEntries.every(([, value]) => value instanceof Blob);
+    }
     return {
       id,
-      size,
+      size: plan.label,
       ok: generation.model === id
         && generation.n === 1
-        && generation.size === size
+        && fieldsOk
         && generation.prompt.includes("mock generation prompt")
-        && form.get("model") === id
-        && form.get("size") === size
-        && form.get("n") === "1"
-        && String(form.get("prompt")).includes("mock edit prompt")
-        && imageEntries.length === 2
-        && imageEntries.every(([, value]) => value instanceof Blob),
+        && (entry.size.param !== "prompt-ar" || generation.prompt.endsWith("--ar 16:9"))
+        && editOk,
     };
   });
   const payloadOk = payloads.every(({ ok }) => ok);
 
   const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const [base64] = extractImagesFromImageApi({ data: [{ b64_json: pngB64 }] });
-  const logSummary = imageApiLogSummary({ data: [{ b64_json: pngB64, url: "https://signed.example/image.png" }] }, "gpt-image-2-4k");
+  const logSummary = imageApiLogSummary({ data: [{ b64_json: pngB64, url: "https://signed.example/image.png" }] }, "gpt-image-2");
   const logText = JSON.stringify(logSummary);
   const outputDir = resolveOutputDir(join(tmpdir(), "88api-image-gen-self-test"));
   const saved = saveBase64Image(base64, outputDir, "self_test_edit");
@@ -3522,7 +3639,7 @@ async function runImagesApiSelfTest() {
 async function runImageStreamSelfTest() {
   console.log("Images API stream self-test: payload shape, partial-image SSE, and final extraction.");
   const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-  const testModel = "gpt-image-2-4k";
+  const testModel = "gpt-image-2";
   const body = buildImagesGenerationBody(testModel, "mock generation", "3840x2160", { preview: true });
   const sse = [
     `data: ${JSON.stringify({ type: "image_generation.partial_image", partial_image_index: 0, b64_json: pngB64 })}`,
@@ -3590,22 +3707,27 @@ async function runModelConfigSelfTest() {
   writeFileSync(configPath, JSON.stringify(legacy, null, 2), "utf8");
   const migrated = loadConfig(configPath);
   const migratedDefaultModel = migrated.model;
+  // v2 saved "gpt-image-2-4k"; v3 keeps gpt-image-2 and remembers 4K.
   migrated.model = "gpt-image-2-4k";
   saveConfig(migrated, configPath);
   const persisted = loadConfig(configPath);
   const removedModelFallback = normalizeConfigShape({ ...legacy, model: "removed-image-model" }).config.model;
+  const nanoConfig = normalizeConfigShape({ apiKey: "sk-test-nano", model: "gemini-3.1-flash-image" }).config;
   const selectedWorker = getPrimaryWorker(persisted, { requireEnabled: true });
   const configSummary = buildConfigSummary(persisted, { envKey: "", source: configPath });
   const replacedConfig = replaceWithSingleKey(persisted, "sk-test-replacement");
-  const presetChecks = MODEL_INFO.flatMap(({ id }) => SUPPORTED_RATIOS.map((ratio) => {
-    const size = resolveSize(id, ratio);
-    return { model: id, ratio, size, error: imageSizeValidationError(size) };
-  }));
-  const presetSizesOk = presetChecks.every((item) => item.size && item.error === null);
+
+  // Every documented exact-pixel preset must pass the local size rules.
+  const presetChecks = CATALOG.models.filter((entry) => entry.size.param === "size").flatMap((entry) => entry.size.resolutions.flatMap((resolution) => entry.size.ratios.map((ratio) => {
+    const plan = resolveRequestPlan(entry, { ratio, resolution });
+    return { model: entry.id, ratio, resolution, size: plan.pixels, error: imageSizeValidationError(plan.pixels) };
+  })));
+  const presetSizesOk = presetChecks.length > 0 && presetChecks.every((item) => item.size && item.error === null);
+  const legacyPlan = resolveGenerationParams({ model: "gpt-image-2-4k", aspect: "16:9" }, {}, {});
   const dryRun = buildDryRunPlan({
     mode: "generation",
-    model: "gpt-image-2-4k",
-    size: "3840x2160",
+    model: legacyPlan.model,
+    size: legacyPlan.size,
     aspect: "16:9",
     prompts: ["mock prompt"],
     count: 2,
@@ -3613,62 +3735,80 @@ async function runModelConfigSelfTest() {
     preview: true,
   });
   const dryText = JSON.stringify(dryRun);
-  let invalidRejected = false;
-  try {
-    validateModel("not-a-model");
-  } catch {
-    invalidRejected = true;
-  }
-  let removedModelRejected = false;
-  try {
-    validateModel("removed-image-model");
-  } catch {
-    removedModelRejected = true;
-  }
-  const newModelsOk = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"].every((model) => {
-    const normalized = normalizeConfigShape({ ...legacy, model }).config;
-    saveConfig(normalized, configPath);
-    return loadConfig(configPath).model === model
-      && effectiveModel({}, normalized) === model
-      && effectiveModel({ model }, persisted) === model
-      && resolveSize(model, "16:9") === "2048x1152";
-  });
-  const ok = MODEL_INFO.length === 4
-    && newModelsOk
+  const rejects = (fn) => {
+    try {
+      fn();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  // The catalog can never point requests at another host or path.
+  const hostile = { schemaVersion: 1, models: [{ ...CATALOG.models[0], id: "evil-image", generate: { endpoint: "https://attacker.example/v1/images" } }, CATALOG.models[0]] };
+  const sanitized = sanitizeCatalog(JSON.parse(JSON.stringify(hostile)), "self-test");
+  const hostileDropped = sanitized.models.length === 1 && sanitized.skipped === 1 && rejects(() => sanitizeCatalog({ schemaVersion: 2, models: [] }, "self-test"));
+
+  const grok = modelEntry("grok-imagine-image");
+  const seedream = modelEntry("doubao-seedream-5-0-pro");
+  const editRulesOk = !!grok && !!seedream
+    && editVariantFor("grok-imagine-image", [{}, {}, {}]).upload === "json"
+    && rejects(() => editVariantFor("grok-imagine-image", [{}, {}, {}, {}]))
+    && editVariantFor("doubao-seedream-5-0-pro", [{}]).upload === "multipart"
+    && editVariantFor("doubao-seedream-5-0-pro", [{ url: "https://example.com/a.png" }, { url: "https://example.com/b.png" }]).endpoint === "/v1/images/generations"
+    && rejects(() => editVariantFor("doubao-seedream-5-0-pro", [{}, {}]))
+    && rejects(() => editVariantFor("midjourney-v8.2", [{}]));
+  const planRulesOk = rejects(() => resolveRequestPlan(grok, { resolution: "4K" }))
+    && rejects(() => resolveRequestPlan(modelEntry("gemini-3-pro-image"), { ratio: "1:4" }))
+    && rejects(() => resolveRequestPlan(modelEntry("gpt-image-2"), { background: "transparent" }))
+    && rejects(() => resolveRequestPlan(modelEntry("az-gpt-image-2"), { background: "transparent", outputFormat: "jpeg" }))
+    && resolveRequestPlan(grok, { ratio: "16:9", resolution: "2K" }).fields.resolution === "2k"
+    && resolveRequestPlan(seedream, { resolution: "2K" }).fields.quality === "2K"
+    && imageApiPrompt("cat", resolveRequestPlan(modelEntry("midjourney-v8.2"), { ratio: "16:9" })) === "cat --ar 16:9";
+
+  // Some upstreams append their own image link after the embedded Base64 image.
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const parsed = parseGeminiChatResponse({ choices: [{ message: { content: `![image](data:image/png;base64,${pngB64})\n![src](https://upstream.example/x.jpg)` } }] });
+  const geminiParseOk = parsed.image?.type === "base64" && parsed.image.data === pngB64
+    && parseGeminiChatResponse({ choices: [{ message: { content: "only text" } }] }).image === null;
+
+  const ok = CATALOG.models.length > 0
     && presetSizesOk
+    && hostileDropped
+    && editRulesOk
+    && planRulesOk
+    && geminiParseOk
     && migratedDefaultModel === DEFAULT_MODEL
     && removedModelFallback === DEFAULT_MODEL
+    && nanoConfig.model === "gemini-3.1-flash-image"
+    && nanoConfig.workers[0]?.apiKey === "sk-test-nano"
     && migrated.workers.length === 3
     && migrated.workers[0].enabled === false
-    && persisted.model === "gpt-image-2-4k"
+    && persisted.model === "gpt-image-2"
+    && persisted.resolution === "4K"
     && persisted.workers[0].apiKey === legacy.workers[0].apiKey
     && selectedWorker?.apiKey === legacy.workers[1].apiKey
     && configSummary.已配置Key === true
     && configSummary.Key预览 === previewKey(legacy.workers[1].apiKey)
     && configSummary.旧版备用Key记录.startsWith("2 个")
-    && !("密钥列表" in configSummary)
     && replacedConfig.workers.length === 1
     && replacedConfig.workers[0].apiKey === "sk-test-replacement"
-    && effectiveModel({ model: "gpt-image-2-4k" }, persisted) === "gpt-image-2-4k"
-    && effectiveModel({}, persisted) === "gpt-image-2-4k"
+    && effectiveModel({ model: "gpt-image-2-4k" }, persisted) === "gpt-image-2"
+    && effectiveModel({}, persisted) === "gpt-image-2"
     && effectiveModel({}, {}) === DEFAULT_MODEL
-    && resolveSize("gpt-image-2", "16:9") === "2048x1152"
-    && resolveSize("gpt-image-2-4k", "16:9") === "3840x2160"
-    && resolveSize("gpt-image-2-4k", "4:3") === "3264x2448"
-    && resolveSize("gpt-image-2-4k", "21:9") === null
-    && invalidRejected
-    && removedModelRejected
+    && legacyPlan.size.pixels === "3840x2160"
+    && rejects(() => validateModel("not-a-model"))
     && dryRun.paidApiCalled === false
-    && dryRun.request.body.model === "gpt-image-2-4k"
+    && dryRun.request.body.model === "gpt-image-2"
+    && dryRun.request.body.size === "3840x2160"
     && !("background" in dryRun.request.body)
-    && !("output_format" in dryRun.request.body)
     && dryRun.taskCount === 2
     && legacy.workers.every((worker) => !dryText.includes(worker.apiKey))
     && !dryText.includes("base64");
   if (existsSync(configPath)) unlinkSync(configPath);
   if (!ok) {
     console.error("Model/config self-test FAILED.");
-    console.error(JSON.stringify({ migrated, persisted, removedModelFallback, selectedWorker, configSummary, replacedConfig, presetChecks, presetSizesOk, dryRun, invalidRejected, removedModelRejected }, null, 2));
+    console.error(JSON.stringify({ migrated, persisted, removedModelFallback, nanoConfig, presetChecks: presetChecks.filter((item) => item.error), presetSizesOk, hostileDropped, editRulesOk, planRulesOk, geminiParseOk, dryRun }, null, 2));
     return 1;
   }
   console.log("Model/config self-test OK.");
@@ -3768,7 +3908,7 @@ async function runConfigJobSelfTest() {
   try {
     const migrated = loadConfig(newPath, [legacyPath]);
     checks.migratedFromLegacy = existsSync(newPath) && existsSync(legacyPath)
-      && migrated.model === "gpt-image-2-4k"
+      && migrated.model === "gpt-image-2" && migrated.resolution === "4K"
       && getPrimaryWorker(migrated)?.apiKey === "sk-test-legacy"
       && loadedConfigSource === legacyPath;
     saveConfig(replaceWithSingleKey(migrated, "sk-test-new"), newPath, [legacyPath]);
@@ -3877,6 +4017,10 @@ function parseArgs(argv) {
     else if (value === "--set-batch-mode") args.flags.setBatchMode = true;
     else if (value === "--prompt" && argv[i + 1]) args.prompts.push(argv[++i]);
     else if (value === "--quality" && argv[i + 1]) args.flags.quality = argv[++i];
+    else if (value === "--resolution" && argv[i + 1]) args.flags.resolution = argv[++i];
+    else if (value === "--background" && argv[i + 1]) args.flags.background = argv[++i];
+    else if (value === "--output-format" && argv[i + 1]) args.flags.outputFormat = argv[++i];
+    else if (value === "--refresh-models") args.flags.refreshModels = true;
     else if (value === "--ratio" && argv[i + 1]) args.flags.ratio = argv[++i];
     else if (value === "--aspect" && argv[i + 1]) args.flags.aspect = argv[++i];
     else if (value === "--count" && argv[i + 1]) args.flags.count = Number.parseInt(argv[++i], 10);
@@ -3956,11 +4100,12 @@ function printUsage() {
 CONFIG
   --get-config
   --config-path
-  --list-models
-  --set-model <${[...MODELS].join("|")}>
+  --list-models                 models in the 88API catalog, marked available/unavailable for the saved Key
+  --refresh-models              reload the model catalog from ${"https://88api.ai/helper/image-models.json"} now
+  --set-model <MODEL>           change the long-term default model (factory default ${DEFAULT_MODEL})
   --set-key <YOUR_88API_KEY>
-  --set-quick-mode --ratio R --count 1..${MAX_GENERATION_COUNT}
-  --set-batch-mode --ratio R --concurrency 1..${MAX_CONCURRENCY}
+  --set-quick-mode --aspect R --resolution 1K|2K|4K --count 1..${MAX_GENERATION_COUNT}
+  --set-batch-mode --aspect R --resolution 1K|2K|4K --concurrency 1..${MAX_CONCURRENCY}
 
 FIRST USE
   runtime: Node.js 18+ (Python is not required)
@@ -3968,22 +4113,24 @@ FIRST USE
   one Key is sufficient; 88API automatically allocates concurrent requests upstream
 
 GENERATE
-  --prompt "..." [--model MODEL] [--ratio R|--aspect R] [--count 1..${MAX_GENERATION_COUNT}] [--transport auto|images] [--preview|--no-preview] [--no-resize] [--dry-run]
+  --prompt "..." [--model MODEL] [--aspect R] [--resolution 1K|2K|4K] [--quality Q] [--background B] [--output-format F] [--count 1..${MAX_GENERATION_COUNT}] [--preview] [--no-resize] [--dry-run]
   --prompt "..." --repeat 1..${MAX_REPEAT} [--concurrency 1..${MAX_CONCURRENCY}] [--adaptive|--no-adaptive]
-  --batch prompts.json [--ratio R|--aspect R] [--concurrency N] [--no-resize]
-  --batch-inline "prompt 1" "prompt 2" ... [--ratio R|--aspect R] [--concurrency N] [--no-resize]
+  --batch prompts.json [--aspect R] [--resolution 1K|2K|4K] [--concurrency N]
+  --batch-inline "prompt 1" "prompt 2" ... [--aspect R] [--resolution 1K|2K|4K] [--concurrency N]
 
 EDIT
-  --edit --image path.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N] [--transport auto|images]
-  --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--count 1..${MAX_EDIT_COUNT}] [--concurrency N]    combine all sources in one edit request
-  --batch-edit --edit --image one.png --image two.png --prompt "..." [--ratio R|--aspect R] [--concurrency N]
-  all edits use Images API multipart image[] uploads
+  --edit --image path.png --prompt "..." [--aspect R] [--resolution 1K|2K|4K] [--count 1..${MAX_EDIT_COUNT}]
+  --edit --image one.png --image https://example.com/two.jpg --prompt "..."   all references go in one edit request
+  --batch-edit --edit --image one.png --image two.png --prompt "..." [--concurrency N]
+  the endpoint, upload format and reference limit come from the model catalog
 
-TRANSPORT
-  --transport auto       use the selected model through Images API
-  --transport images     force /v1/images/generations or /v1/images/edits
-  --preview               stream and save a real partial-image preview for one Images generation task
-  --no-preview            wait for the final image without saving a preview
+PARAMETERS (validated per model against the catalog before any paid request)
+  --aspect / --ratio R          aspect ratio, e.g. 1:1, 16:9, 9:16 (aliases: square, landscape, portrait)
+  --resolution 1K|2K|4K         converted to the model's own size field (pixels, tier, aspect_ratio+resolution or image_config)
+  --quality Q                   model quality level (e.g. low|medium|high); 1K/2K/4K is read as --resolution for older commands
+  --background B                transparent|opaque|auto where the model supports it
+  --output-format F             png|webp|jpeg where the model supports it
+  --preview                     partial-image SSE preview for one text-to-image task (exact-pixel OpenAI models only)
 
 WORKFLOW BATCH EDIT
   --workflow-batch-edit --fixed-ref ref.png --item-dir dir --templates templates.json [--limit ${WORKFLOW_DEFAULT_LIMIT}] [--aspect R] [--concurrency 1..${MAX_CONCURRENCY}] [--repair-passes 0..5|--no-repair] [--dry-run]
@@ -3998,10 +4145,9 @@ TOOLS
   --retry-download path.pending-download.json    fetch an already generated and billed image from its saved result link; sends no new paid request
   --job-status [job-id|record.json]               show what a paid run actually did (recent runs when omitted); sends no request
   --json                                          print one machine-readable result line at the end of a paid run
-  --resolve-size --model MODEL --aspect 16:9
+  --resolve-size --model MODEL --aspect 16:9 --resolution 4K
   --self-test
   --self-test-adaptive
-  --self-test-workers
   --self-test-images-api
   --self-test-download
   --self-test-image-stream
@@ -4009,29 +4155,66 @@ TOOLS
 
 DEFAULTS
   API root: ${API_ROOT}
-  generation endpoint: ${IMAGES_GENERATIONS_URL}
-  edit endpoint: ${IMAGES_EDITS_URL}
   factory model: ${DEFAULT_MODEL}
-  models: ${[...MODELS].join(", ")}
-  API mode: OpenAI Images API only; no GPT text model required
-  resolution: gpt-image-2=2K; gpt-image-2-4k=4K; gpt-image-2.5-flare / gpt-image-2.5-sunburst=2K preset
+  model catalog: ${CATALOG.source}${CATALOG.fetchedAt ? ` (${CATALOG.fetchedAt})` : ""}; cached at ${CATALOG_CACHE_PATH} for 24h
+  catalog models: ${catalogModelIds().join(", ")}
   output: ~/Pictures/88api-image-gen
   config: ${CONFIG_PATH} (API88_CONFIG_DIR overrides the directory; API88_KEY overrides the saved Key)
   job records: ${JOBS_DIR}
   scheduler: one configured Key with up to ${MAX_CONCURRENCY} local request slots; upstream allocation uses the auto group
   adaptive: on, concurrency ${DEFAULTS.concurrency}, retries ${MAX_RETRIES}, key cooldown ${DEFAULT_WORKER_COOLDOWN_MS / 1000}s
-  notice: ${API_SIZE_LIMIT_NOTICE}
-  workflow batch edit: generic fixed refs + variable item refs + user templates, auto resume and repair passes
-  nail stress test: compatibility preset for ${WORKFLOW_NAIL_PRESET}; do not assume product type in generic workflow
+  notice: ${API_SIZE_LIMIT_NOTICE}`);
+}
 
-RATIOS
-  supported ratios: ${supportedRatioText()}
-  aliases: square=1:1, landscape=4:3, portrait=3:4
-  unsupported ratios are rejected before any paid request
+// GET /v1/models with the saved Key: the models this Key's group can call, with
+// each model's declared endpoint types. Free; never a paid request.
+async function fetchKeyModels(apiKey) {
+  const res = await requestWithTimeout(MODELS_URL, { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } }, 15_000);
+  if (!res.ok) throw new Error(`GET /v1/models returned HTTP ${res.status}`);
+  const data = await res.json();
+  return (Array.isArray(data?.data) ? data.data : []).map((item) => ({ id: String(item.id || ""), endpointTypes: Array.isArray(item.supported_endpoint_types) ? item.supported_endpoint_types : [] }));
+}
 
-SIZE MATRIX
-  2K: 1:1 2048x2048, 3:2 2048x1360, 2:3 1360x2048, 4:3 2048x1536, 3:4 1536x2048, 16:9 2048x1152, 9:16 1152x2048, 2:1 2048x1024, 1:2 1024x2048, 7:4 2208x1264, 4:7 1264x2208
-  4K: 1:1 2880x2880, 3:2 3520x2352, 2:3 2352x3520, 4:3 3264x2448, 3:4 2448x3264, 16:9 3840x2160, 9:16 2160x3840, 2:1 3840x1920, 1:2 1920x3840, 7:4 3808x2176, 4:7 2176x3808`);
+function savedApiKey(config) {
+  return ENV_API_KEY || getPrimaryWorker(config, { requireEnabled: true })?.apiKey || "";
+}
+
+// A model the catalog does not document can still be tried when the Key lists
+// it as an image model: it gets a conservative inferred entry (see inferEntry).
+async function registerUndocumentedModel(id, config) {
+  const apiKey = savedApiKey(config);
+  if (!apiKey) throw new Error(`Unknown model="${id}". It is not in the 88API model catalog, and no Key is configured to look it up.`);
+  const listed = (await fetchKeyModels(apiKey)).find((item) => item.id === id);
+  if (!listed) throw new Error(`Model "${id}" is not in the 88API model catalog and your Key's group does not list it. Run --list-models to see what this Key can use.`);
+  const entry = inferEntry(id, listed.endpointTypes);
+  if (!entry) throw new Error(`Model "${id}" is not an image model (declared endpoints: ${listed.endpointTypes.join(", ") || "none"}).`);
+  INFERRED_ENTRIES.set(id, entry);
+}
+
+async function buildModelList(config) {
+  const apiKey = savedApiKey(config);
+  let keyModels = null;
+  let keyError = null;
+  if (apiKey) {
+    try {
+      keyModels = await fetchKeyModels(apiKey);
+    } catch (error) {
+      keyError = error?.message || String(error);
+    }
+  }
+  const listed = keyModels ? new Set(keyModels.map((item) => item.id)) : null;
+  const undocumented = keyModels
+    ? keyModels.filter((item) => !findEntry(CATALOG, item.id) && inferEntry(item.id, item.endpointTypes) && /image|banana|imagine|seedream|midjourney|flux/i.test(item.id))
+      .map((item) => describeEntry(inferEntry(item.id, item.endpointTypes), true))
+    : [];
+  return {
+    defaultModel: DEFAULT_MODEL,
+    configuredModel: config.model,
+    catalog: { source: CATALOG.source, fetchedAt: CATALOG.fetchedAt, models: CATALOG.models.length },
+    keyCheck: listed ? "available = listed by GET /v1/models for the saved Key" : (keyError ? `could not query the Key's models: ${keyError}` : "no Key configured; availability unknown"),
+    models: CATALOG.models.map((entry) => describeEntry(entry, listed ? listed.has(entry.id) : null)),
+    undocumented,
+  };
 }
 
 function runModeName(flags) {
@@ -4043,44 +4226,36 @@ function runModeName(flags) {
   return "generation";
 }
 
+// Resolves the model and turns --aspect / --resolution / --quality / --background /
+// --output-format into a request plan checked against the model catalog.
 function resolveGenerationParams(flags, modeConfig, config = {}) {
-  const explicitRatio = flags.aspect ?? flags.ratio ?? null;
-  const requestedRatio = explicitRatio ?? modeConfig?.ratio ?? DEFAULTS.ratio;
-  const ratioParts = parseRatioParts(requestedRatio);
-  if (!ratioParts) {
-    console.error(`ERROR: Invalid ratio="${requestedRatio}". Supported ratios: ${supportedRatioText()}.`);
-    process.exit(1);
-  }
-  const ratio = `${ratioParts.left}:${ratioParts.right}`;
-  if (!isSupportedRatio(ratio)) {
-    console.error(`ERROR: Unsupported ratio="${requestedRatio}". Supported ratios: ${supportedRatioText()}.`);
-    process.exit(1);
-  }
   const model = effectiveModel(flags, config);
-  const requestedQuality = flags.quality || null;
-  const quality = normalizeQuality(requestedQuality, model);
-  if (requestedQuality && shouldWarnFixedQuality(requestedQuality, model)) {
-    console.warn(`NOTICE: ${model} uses the fixed ${quality} matrix; ignoring requested quality="${requestedQuality}". ${API_SIZE_LIMIT_NOTICE}`);
-  }
-
-  const size = resolveSize(model, ratio);
-  if (!size) {
-    console.error(`ERROR: Unable to resolve ratio="${requestedRatio}" for model ${model}. Supported ratios: ${supportedRatioText()}.`);
+  const entry = modelEntry(model);
+  const explicitRatio = flags.aspect ?? flags.ratio ?? null;
+  const ratio = explicitRatio ? normalizeRatio(explicitRatio) : null;
+  // --quality 2K/4K came from v2, where it named the size tier.
+  const legacyTier = /^[124]k$/i.test(String(flags.quality || "")) ? String(flags.quality).toUpperCase() : null;
+  const aliasResolution = legacyModelAlias(flags.model)?.resolution || null;
+  try {
+    const plan = resolveRequestPlan(entry, {
+      ratio,
+      resolution: flags.resolution || legacyTier || aliasResolution || null,
+      quality: legacyTier ? null : flags.quality,
+      background: flags.background,
+      outputFormat: flags.outputFormat,
+      savedRatio: modeConfig?.ratio,
+      savedResolution: modeConfig?.resolution || config.resolution || modeConfig?.quality,
+    });
+    if (plan.pixels && entry.size.param === "size") {
+      const sizeError = imageSizeValidationError(plan.pixels);
+      if (sizeError) throw new Error(`invalid ${model} preset: ${sizeError}`);
+    }
+    if (entry.inferred) console.warn(`NOTICE: ${model} is not documented in the 88API model catalog yet; only the prompt and reference images are sent, without size or quality fields.`);
+    return { model, ratio: plan.ratio, resolution: plan.resolution, quality: plan.resolution, size: plan };
+  } catch (error) {
+    console.error(`ERROR: ${error?.message || String(error)} No paid request was made.`);
     process.exit(1);
   }
-  const sizeError = imageSizeValidationError(size);
-  if (sizeError) {
-    console.error(`ERROR: Invalid ${model} preset: ${sizeError} No paid request was made.`);
-    process.exit(1);
-  }
-  return {
-    model,
-    quality,
-    resolution: quality,
-    sizeMode: quality,
-    ratio,
-    size,
-  };
 }
 
 async function main() {
@@ -4089,10 +4264,29 @@ async function main() {
     console.error(`ERROR: Unsupported option "${flags.unknownOption}". Run --help for the v${PLUGIN_VERSION} command list.`);
     process.exit(1);
   }
+  // Only runs that go online anyway refresh the catalog; offline commands
+  // (dry-run, config, job status, self-test) use the cache or bundled snapshot.
+  const paidRun = !flags.dryRun && (prompts.length > 0 || flags.batchFile || flags.edit || flags.workflowBatchEdit || flags.nailStressTest);
+  CATALOG = await loadCatalog({
+    cachePath: CATALOG_CACHE_PATH,
+    allowNetwork: !!(paidRun || flags.listModels || flags.refreshModels || flags.setModel),
+    force: !!flags.refreshModels,
+  });
+  if (CATALOG.warning && (paidRun || flags.listModels || flags.refreshModels)) console.warn(`NOTICE: ${CATALOG.warning}; using the ${CATALOG.source}.`);
+  if (flags.refreshModels) {
+    console.log(`Model catalog: ${CATALOG.source}, ${CATALOG.models.length} models${CATALOG.fetchedAt ? `, fetched ${CATALOG.fetchedAt}` : ""}.`);
+    if (!flags.listModels && prompts.length === 0) return;
+  }
   const config = loadConfig();
   try {
-    if (flags.model) validateModel(flags.model);
-    if (flags.setModel) validateModel(flags.setModel);
+    // --model may name a model the Key lists but the catalog does not document
+    // yet; --set-model only accepts documented models.
+    if (flags.model) {
+      const id = legacyModelAlias(flags.model)?.model || flags.model;
+      if (!modelEntry(id) && !flags.dryRun) await registerUndocumentedModel(id, config);
+      validateModel(id);
+    }
+    if (flags.setModel) validateModel(legacyModelAlias(flags.setModel)?.model || flags.setModel);
   } catch (error) {
     console.error(`ERROR: ${error?.message || String(error)}`);
     process.exit(1);
@@ -4146,14 +4340,16 @@ async function main() {
   }
 
   if (flags.listModels) {
-    console.log(JSON.stringify({ defaultModel: DEFAULT_MODEL, configuredModel: config.model, models: MODEL_INFO }, null, 2));
+    console.log(JSON.stringify(await buildModelList(config), null, 2));
     return;
   }
 
   if (flags.setModel) {
-    config.model = flags.setModel;
+    const alias = legacyModelAlias(flags.setModel);
+    config.model = alias?.model || flags.setModel;
+    if (alias) config.resolution = alias.resolution;
     saveConfig(config);
-    console.log(`Default model saved: ${config.model} (${modelResolution(config.model)})`);
+    console.log(`Default model saved: ${config.model}`);
     return;
   }
 
@@ -4178,28 +4374,37 @@ async function main() {
   if (flags.setQuickMode) {
     const previous = config.quickMode || {};
     const resolved = resolveGenerationParams(flags, previous, config);
-    const { model, quality, ratio, size } = resolved;
+    const { model, resolution, ratio, size } = resolved;
     const count = clampInteger(flags.count ?? previous.count, 1, MAX_GENERATION_COUNT, DEFAULTS.count);
-    config.quickMode = { quality, ratio, count };
+    config.quickMode = { resolution, ratio, count };
     saveConfig(config);
-    console.log(`Quick mode saved: ${quality}, ${ratioLabel(ratio)} (${size}), count ${count}; current model ${model}`);
+    console.log(`Quick mode saved: ${size}, count ${count}; current model ${model}`);
     return;
   }
 
   if (flags.setBatchMode) {
     const previous = config.batchMode || {};
     const resolved = resolveGenerationParams(flags, previous, config);
-    const { model, quality, ratio, size } = resolved;
+    const { model, resolution, ratio, size } = resolved;
     const concurrency = clampInteger(flags.concurrency ?? previous.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
-    config.batchMode = { quality, ratio, concurrency };
+    config.batchMode = { resolution, ratio, concurrency };
     saveConfig(config);
-    console.log(`Batch mode saved: ${quality}, ${ratioLabel(ratio)} (${size}), concurrency ${concurrency}; current model ${model}`);
+    console.log(`Batch mode saved: ${size}, concurrency ${concurrency}; current model ${model}`);
     return;
   }
 
   if (flags.resolveSize) {
-    const resolved = resolveGenerationParams(flags, config.quickMode, config);
-    console.log(JSON.stringify(resolved, null, 2));
+    const { model, size } = resolveGenerationParams(flags, config.quickMode, config);
+    const entry = modelEntry(model);
+    console.log(JSON.stringify({
+      model,
+      protocol: entry.protocol,
+      ratio: size.ratio,
+      resolution: size.resolution,
+      pixels: size.pixels,
+      requestFields: entry.protocol === "gemini-chat" ? { extra_body: { google: { image_config: size.imageConfig } } } : size.fields,
+      promptSuffix: size.promptSuffix || null,
+    }, null, 2));
     return;
   }
 
@@ -4274,7 +4479,7 @@ async function main() {
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const repairPasses = clampInteger(flags.repairPasses, 0, 5, WORKFLOW_DEFAULT_REPAIR_PASSES);
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (workflow batch); model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport} (workflow batch); model: ${model} (${size})`);
     const result = await runWorkflowBatchEdit(configuredWorkers, {
       fixedRefPaths: flags.fixedRefs || [],
       itemDir: flags.itemDir,
@@ -4317,7 +4522,7 @@ async function main() {
     const nailParams = resolveGenerationParams({ ...flags, aspect: "9:16" }, { ratio: "9:16" }, config);
     const { model, size } = nailParams;
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (batch preset); model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport} (batch preset); model: ${model} (${size})`);
     const result = await runNailStressTest(configuredWorkers, {
       personaPath: flags.personaPath,
       productDir: flags.productDir,
@@ -4347,16 +4552,20 @@ async function main() {
       console.error("ERROR: --edit requires --prompt <text>.");
       process.exit(1);
     }
-    if (images.length > MAX_EDIT_SOURCES) {
-      console.error(`ERROR: Edit supports up to ${MAX_EDIT_SOURCES} source images.`);
-      process.exit(1);
-    }
     if (flags.unsupportedEditRoute) {
-      console.error("ERROR: Image-to-image uses /v1/images/edits only; legacy Responses edit routes are disabled.");
+      console.error("ERROR: Image-to-image uses the edit request the model catalog documents; legacy Responses edit routes are disabled.");
       process.exit(1);
     }
     const editParams = resolveGenerationParams(flags, config.quickMode, config);
     const { model, ratio, size } = editParams;
+    try {
+      // Batch edit sends one reference per request; a normal edit sends them all at once.
+      const perRequest = images.length > 1 && flags.batchEdit ? [images[0]] : images;
+      editVariantFor(model, perRequest.map((path) => ({ url: /^https?:\/\//i.test(path) ? path : null })));
+    } catch (error) {
+      console.error(`ERROR: ${error?.message || String(error)} No paid request was made.`);
+      process.exit(1);
+    }
     if (images.length > 1 && flags.batchEdit) {
       const concurrency = clampInteger(flags.concurrency ?? config.batchMode?.concurrency, 1, MAX_CONCURRENCY, DEFAULTS.concurrency);
       const transport = resolveRunTransport(requestedTransport, true);
@@ -4364,7 +4573,7 @@ async function main() {
         printDryRunPlan({ mode: "batch-edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images.slice(0, 1), count: images.length, concurrency });
         return;
       }
-      console.log(`Transport: ${transport} (batch edit); model: ${model} (${modelResolution(model)})`);
+      console.log(`Transport: ${transport} (batch edit); model: ${model} (${size})`);
       process.exitCode = await runBatchEdit(configuredWorkers, images, prompts[0], size, concurrency, outputDir, {
         model,
         adaptive: flags.adaptive !== false,
@@ -4382,7 +4591,7 @@ async function main() {
       printDryRunPlan({ mode: images.length > 1 ? "multi-reference-edit" : "edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images, count, concurrency, preview });
       return;
     }
-    console.log(`Transport: ${transport}; model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport}; model: ${model} (${size})`);
     const result = await editImage(configuredWorkers, images, prompts[0], size, outputDir, count, false, {
       adaptive: flags.adaptive !== false,
       concurrency,
@@ -4442,7 +4651,7 @@ async function main() {
       printDryRunPlan({ mode: "batch", model, size, aspect: ratio, prompts: batchPrompts.map(String), count: batchPrompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${size})`);
     // Let the event loop drain: process.exit() right after fetch aborts on Windows
     // (libuv UV_HANDLE_CLOSING assertion, exit code 127) and hides the real result.
     process.exitCode = await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
@@ -4465,7 +4674,7 @@ async function main() {
       printDryRunPlan({ mode: "batch-inline", model, size, aspect: ratio, prompts, count: prompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${size})`);
     process.exitCode = await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
@@ -4486,7 +4695,7 @@ async function main() {
       printDryRunPlan({ mode: "repeat", model, size, aspect: ratio, prompts: Array(total).fill(prompt), count: total, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${modelResolution(model)})`);
+    console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${size})`);
     process.exitCode = await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
@@ -4498,12 +4707,15 @@ async function main() {
   }
 
   const transport = resolveRunTransport(requestedTransport, false);
-  const preview = flags.preview === true;
+  const previewEntry = modelEntry(model);
+  // Partial-image SSE only exists on the exact-pixel OpenAI Images models.
+  const preview = flags.preview === true && previewEntry.protocol === "openai-images" && previewEntry.size.param === "size";
+  if (flags.preview === true && !preview) console.warn(`NOTICE: ${model} does not support --preview; waiting for the final image instead.`);
   if (flags.dryRun) {
     printDryRunPlan({ mode: "generation", model, size, aspect: ratio, prompts: [prompt], count: 1, concurrency: 1, preview });
     return;
   }
-  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${modelResolution(model)})`);
+  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${size})`);
   process.exitCode = await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
     model,
     adaptive: flags.adaptive !== false,
