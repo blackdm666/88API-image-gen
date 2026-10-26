@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -21,7 +21,7 @@ const API_ROOT = "https://88api.ai";
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
 const MODELS_URL = `${API_ROOT}/v1/models`;
-const PLUGIN_VERSION = "3.0.2";
+const PLUGIN_VERSION = "3.0.3";
 const DEFAULT_MODEL = "gpt-image-2";
 // Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
 const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
@@ -274,20 +274,27 @@ function loadConfig(configPath = CONFIG_PATH, legacyPaths = defaultLegacyPaths(c
   const sourcePath = existsSync(configPath) ? configPath : (legacyPaths.find((path) => existsSync(path)) || null);
   loadedConfigSource = sourcePath;
   if (!sourcePath) return normalizeConfigShape({}).config;
+  let normalized;
   try {
-    const parsed = JSON.parse(readFileSync(sourcePath, "utf8"));
-    const normalized = normalizeConfigShape(parsed);
+    normalized = normalizeConfigShape(JSON.parse(readFileSync(sourcePath, "utf8")));
+  } catch (error) {
+    console.warn(`WARNING: Unable to read 88API configuration at ${sourcePath}: ${error?.message || String(error)}`);
+    return normalizeConfigShape({}).config;
+  }
+  // Migration / normalization write-backs are optional: in a read-only sandbox the
+  // configuration that was read is still used for this run.
+  try {
     if (sourcePath !== configPath) {
       saveConfig(normalized.config, configPath, legacyMirrorPaths(configPath).filter((path) => path !== sourcePath));
       console.warn(`NOTICE: Copied the 88API configuration from ${sourcePath} to ${configPath}; the old file was kept.`);
     } else if (normalized.changed) {
       saveConfig(normalized.config, configPath);
     }
-    return normalized.config;
   } catch (error) {
-    console.warn(`WARNING: Unable to read 88API configuration at ${sourcePath}: ${error?.message || String(error)}`);
-    return normalizeConfigShape({}).config;
+    if (!isPermissionError(error)) throw error;
+    console.warn(`NOTICE: could not update ${configPath} (${error.code}); using the configuration read from ${sourcePath} for this run.`);
   }
+  return normalized.config;
 }
 
 function getConfiguredWorkers(config, options = {}) {
@@ -469,10 +476,47 @@ function timestamp() {
   ].join("");
 }
 
-function resolveOutputDir(userDir) {
-  const dir = userDir || join(homedir(), "Pictures", "88api-image-gen");
+// Sandboxed Agent clients (DeepSeek Harness, Codex workspace-write) may only allow
+// writes inside the working directory. When a default folder under the home
+// directory is not writable, the CLI uses one under the current directory.
+const WORKSPACE_OUTPUT_DIR = join(process.cwd(), "88api-images");
+const WORKSPACE_JOBS_DIR = join(process.cwd(), ".88api-image-gen-jobs");
+const reportedFallbacks = new Set();
+
+function isPermissionError(error) {
+  return ["EPERM", "EACCES", "EROFS"].includes(error?.code);
+}
+
+// An existing folder can still be read-only in a sandbox, so probe with a write.
+function assertWritableDir(dir) {
   mkdirSync(dir, { recursive: true });
-  return dir;
+  const probe = join(dir, `.write-test-${process.pid}-${Math.random().toString(36).slice(2, 6)}`);
+  writeFileSync(probe, "");
+  unlinkSync(probe);
+}
+
+function writableDir(preferred, fallback, label, assertWritable = assertWritableDir) {
+  try {
+    assertWritable(preferred);
+    return preferred;
+  } catch (error) {
+    if (!fallback || !isPermissionError(error)) throw error;
+    assertWritable(fallback);
+    if (!reportedFallbacks.has(label)) {
+      reportedFallbacks.add(label);
+      console.warn(`NOTICE: the default ${label} ${preferred} is not writable here (${error.code}, usually a sandboxed client); using ${fallback} instead.`);
+    }
+    return fallback;
+  }
+}
+
+function resolveOutputDir(userDir) {
+  // An explicit --output-dir is the user's choice: report a failure instead of moving it.
+  if (userDir) {
+    mkdirSync(userDir, { recursive: true });
+    return userDir;
+  }
+  return writableDir(join(homedir(), "Pictures", "88api-image-gen"), WORKSPACE_OUTPUT_DIR, "output folder");
 }
 
 function fileStem(name) {
@@ -1059,6 +1103,27 @@ function buildImagesGenerationBody(model, prompt, size, options = {}) {
   return body;
 }
 
+// GPT Image edits need an exact pixel size. Without --aspect, follow the first
+// local reference (Gemini and Grok already do this upstream) instead of the
+// catalog's 1:1 default, which would reframe a 3:2 photo into a square.
+function referenceAspect(model, imagePaths = []) {
+  const entry = modelEntry(model);
+  if (entry?.size.param !== "size") return null;
+  const first = imagePaths.find((path) => !/^https?:\/\//i.test(String(path)));
+  if (!first || !existsSync(first)) return null;
+  const dims = readImageDimensions(readFileSync(first));
+  if (!dims?.width || !dims?.height) return null;
+  const target = Math.log(dims.width / dims.height);
+  let best = null;
+  for (const ratio of entry.size.ratios) {
+    const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(ratio);
+    if (!match) continue;
+    const distance = Math.abs(Math.log(Number(match[1]) / Number(match[2])) - target);
+    if (!best || distance < best.distance) best = { ratio, distance };
+  }
+  return best ? { ratio: best.ratio, width: dims.width, height: dims.height } : null;
+}
+
 function editVariantFor(model, sources) {
   return selectEditVariant(modelEntry(model), sources.map((source) => ({ kind: source.url ? "url" : "file" })));
 }
@@ -1438,9 +1503,9 @@ function writeJobRecord(record) {
   }
 }
 
-function startJobRecord({ mode, model = null, outputDir = null }, jobsDir = JOBS_DIR) {
+function startJobRecord({ mode, model = null, outputDir = null }, preferredJobsDir = JOBS_DIR) {
   const id = newJobId();
-  mkdirSync(jobsDir, { recursive: true });
+  const jobsDir = writableDir(preferredJobsDir, preferredJobsDir === JOBS_DIR ? WORKSPACE_JOBS_DIR : null, "job record folder");
   const record = {
     id,
     path: join(jobsDir, `${id}.json`),
@@ -1586,19 +1651,25 @@ function readJobRecord(path) {
   return { ...JSON.parse(readFileSync(path, "utf8")), path };
 }
 
+// Records may live in the default folder or, in a sandboxed client, in the
+// fallback folder under the working directory; --job-status checks both.
+function jobRecordDirs(jobsDir = JOBS_DIR) {
+  return jobsDir === JOBS_DIR ? [JOBS_DIR, WORKSPACE_JOBS_DIR] : [jobsDir];
+}
+
 function listJobRecordPaths(jobsDir = JOBS_DIR) {
-  if (!existsSync(jobsDir)) return [];
-  return readdirSync(jobsDir)
-    .filter((name) => name.endsWith(".json"))
-    .sort()
-    .reverse()
-    .map((name) => join(jobsDir, name));
+  const paths = jobRecordDirs(jobsDir)
+    .filter((dir) => existsSync(dir))
+    .flatMap((dir) => readdirSync(dir).filter((name) => name.endsWith(".json")).map((name) => ({ name, path: join(dir, name) })));
+  return paths.sort((a, b) => b.name.localeCompare(a.name)).map(({ path }) => path);
 }
 
 function resolveJobRecordPath(value, jobsDir = JOBS_DIR) {
   if (existsSync(value)) return value;
-  const byId = join(jobsDir, `${value.replace(/\.json$/i, "")}.json`);
-  if (existsSync(byId)) return byId;
+  for (const dir of jobRecordDirs(jobsDir)) {
+    const byId = join(dir, `${value.replace(/\.json$/i, "")}.json`);
+    if (existsSync(byId)) return byId;
+  }
   throw new Error(`Job record not found: ${value}`);
 }
 
@@ -3995,6 +4066,65 @@ async function runConfigJobSelfTest() {
   return 0;
 }
 
+// Sandboxed clients: unwritable default folders fall back to the working
+// directory, other errors still surface; GPT Image edits follow the reference.
+async function runSandboxSelfTest() {
+  console.log("Sandbox self-test: writable-folder fallback and reference-image aspect.");
+  const root = join(tmpdir(), `88api-image-gen-sandbox-self-test-${process.pid}-${Date.now()}`);
+  const preferred = join(root, "home-default");
+  const fallback = join(root, "workspace");
+  const denied = (dir) => {
+    if (dir === preferred) {
+      const error = new Error(`EPERM: operation not permitted, mkdir '${dir}'`);
+      error.code = "EPERM";
+      throw error;
+    }
+    assertWritableDir(dir);
+  };
+  const rejects = (fn) => {
+    try {
+      fn();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  const fellBack = writableDir(preferred, fallback, "self-test folder", denied) === fallback && existsSync(fallback);
+  const keptPreferred = writableDir(join(root, "ok"), fallback, "self-test folder") === join(root, "ok");
+  const noFallbackRejects = rejects(() => writableDir(preferred, null, "self-test folder", denied));
+  const otherErrorRejects = rejects(() => writableDir(join(root, "x"), fallback, "self-test folder", () => {
+    const error = new Error("disk full");
+    error.code = "ENOSPC";
+    throw error;
+  }));
+
+  // A PNG header is enough for the dimension reader.
+  const png = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+  png.write("IHDR", 12, "ascii");
+  png.writeUInt32BE(1536, 16);
+  png.writeUInt32BE(1024, 20);
+  const refPath = join(root, "ref-3x2.png");
+  writeFileSync(refPath, png);
+  const gptAspect = referenceAspect("gpt-image-2", [refPath])?.ratio;
+  const geminiAspect = referenceAspect("gemini-3.1-flash-image", [refPath]);
+  const urlOnly = referenceAspect("gpt-image-2", ["https://example.com/a.png"]);
+
+  const ok = fellBack && keptPreferred && noFallbackRejects && otherErrorRejects && gptAspect === "3:2" && geminiAspect === null && urlOnly === null;
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    // leftover temp files are harmless
+  }
+  if (!ok) {
+    console.error("Sandbox self-test FAILED.");
+    console.error(JSON.stringify({ fellBack, keptPreferred, noFallbackRejects, otherErrorRejects, gptAspect, geminiAspect, urlOnly }, null, 2));
+    return 1;
+  }
+  console.log("Sandbox self-test OK.");
+  return 0;
+}
+
 async function runUnifiedSelfTest() {
   const tests = [
     ["adaptive", runAdaptiveSelfTest],
@@ -4004,6 +4134,7 @@ async function runUnifiedSelfTest() {
     ["workflow", runWorkflowSelfTest],
     ["model-config", runModelConfigSelfTest],
     ["config-job", runConfigJobSelfTest],
+    ["sandbox", runSandboxSelfTest],
   ];
   const results = [];
   for (const [name, test] of tests) {
@@ -4584,7 +4715,9 @@ async function main() {
       console.error("ERROR: Image-to-image uses the edit request the model catalog documents; legacy Responses edit routes are disabled.");
       process.exit(1);
     }
-    const editParams = resolveGenerationParams(flags, config.quickMode, config);
+    const followed = !flags.aspect && !flags.ratio ? referenceAspect(effectiveModel(flags, config), images) : null;
+    if (followed) console.warn(`NOTICE: aspect following the first reference image (${followed.width}x${followed.height}) -> ${followed.ratio}; pass --aspect to choose another.`);
+    const editParams = resolveGenerationParams(followed ? { ...flags, aspect: followed.ratio } : flags, config.quickMode, config);
     const { model, ratio, size } = editParams;
     try {
       // Batch edit sends one reference per request; a normal edit sends them all at once.
