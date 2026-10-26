@@ -1,0 +1,53 @@
+{
+  "name": "88api-image-gen",
+  "version": "3.1.0",
+  "description": "88API-Image-Gen for DeepSeek Harness: every 88API image model (GPT Image, Nano Banana, Grok, Seedream, Midjourney) as one skill. Claude Code, Codex and ZCode install it from the same repo through their plugin marketplaces.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "88api",
+    "image-generation",
+    "nano-banana"
+  ],
+  "author": {
+    "name": "88api.ai",
+    "url": "https://88api.ai/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blackdm666/88API-image-gen.git"
+  },
+  "homepage": "https://github.com/blackdm666/88API-image-gen#readme",
+  "bugs": {
+    "url": "https://github.com/blackdm666/88API-image-gen/issues"
+  },
+  "type": "module",
+  "main": "./dsh/index.js",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh/",
+    "plugins/88api-image-gen/skills/",
+    "README.md",
+    "VERSION.txt"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "check": "node --check dsh/index.js && node --test dsh/package.test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-skill-filesystem": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-skill-filesystem": {
+      "optional": true
+    }
+  }
+}

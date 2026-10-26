@@ -1,0 +1,4 @@
+# Added to the DeepSeek Harness profile when this package is installed as a plugin.
+- insert:
+    - id: 88api-image-gen
+      name: 88api-image-gen
