@@ -12,7 +12,7 @@
 
 > 原 **88API-Nano-Banana** 插件已停止更新，Gemini 生图并入本插件；装好本插件后 Nano 的 Key 会自动迁移。DeepSeek Harness 原生插件 **dsh-plugin-88api-image** 也已停止更新，装过的请先在插件设置里卸载，再安装本插件。
 
-> 🎬 **想做视频？** 试试姊妹插件 [88API-Seedance-Studio](https://github.com/blackdm666/seedance-studio)：一句话出短片或 TVC 广告片，还能反推参考视频的提示词。和本插件共用同一个 88API Key，见下方[视频生成插件](#视频生成插件88api-seedance-studio)。
+> 🎬 **想做视频？** 试试姊妹插件 [88API-Video-Studio](https://github.com/blackdm666/seedance-studio)：一句话出短片或 TVC 广告片，还能反推参考视频的提示词。和本插件共用同一个 88API Key，见下方[视频生成插件](#视频生成插件88api-video-studio)。
 
 ## 快速开始
 
@@ -187,9 +187,9 @@ node generate.mjs --job-status
 - **Trae**：终端运行 `npx skills update -g -y`；手动复制安装的，用新版技能文件夹覆盖旧的。然后新开对话。
 - **其它客户端**：用新版技能文件夹覆盖旧的。
 
-## 视频生成插件：88API-Seedance-Studio
+## 视频生成插件：88API-Video-Studio
 
-[88API-Seedance-Studio](https://github.com/blackdm666/seedance-studio) 是 88API 的视频生成插件，和本插件搭配使用：先用本插件做关键帧、人物或产品图，再交给它生成视频。
+[88API-Video-Studio](https://github.com/blackdm666/seedance-studio) 是 88API 的视频生成插件，和本插件搭配使用：先用本插件做关键帧、人物或产品图，再交给它生成视频。
 
 | 用法 | 你说 | 它做 |
 | --- | --- | --- |
