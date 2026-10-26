@@ -120,7 +120,7 @@ Codex 里在输入框输入 `@` 选择 **88API-Image-Gen** 再描述；Claude Co
 - **绝不自动重发**：请求一旦可能已被 88API 受理，插件就不会自动重试、换模型或换接口，避免重复扣费。你明确说「重试」时，Agent 才会再提交一次。
 - **免费查清状态**：每次付费运行都会留提交记录。客户端中断了、不确定有没有出图时，运行 `--job-status` 就能看到每个请求是已保存、未发出、被拒绝，还是状态未知（可能已扣费）。
 - **结果下载失败可免费重下**：图已生成但下载失败时，插件会先免费重试，并保存结果链接，之后可以用 `--retry-download` 再下一次。
-- **Key 只存在本机**：保存在 `~/.88api/image-gen.json`，本机所有客户端共用，Agent 只显示脱敏后的 Key。不想把 Key 发进对话，也可以设置环境变量 `API88_KEY`。只在信任的对话里提供 Key，不要贴到 Issue、公开聊天或截图里。
+- **Key 只存在本机**：保存在 `~/.88api/image-gen.json`，本机所有客户端共用；还没配置时会直接复用视频插件 88API-Video-Studio 保存的 Key，不用再配一次。Agent 只显示脱敏后的 Key。不想把 Key 发进对话，也可以设置环境变量 `API88_KEY`。只在信任的对话里提供 Key，不要贴到 Issue、公开聊天或截图里。
 - **模型清单只能指向 88API**：清单来自 `https://88api.ai/helper/image-models.json`，只允许 88api.ai 上固定的接口路径；格式不对或被篡改时，插件改用本机缓存或内置快照。
 
 ## 长任务与中断
@@ -204,8 +204,8 @@ node generate.mjs --job-status
 
 ## 项目信息
 
-- 版本：`3.1.2`
+- 版本：`3.1.3`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件名：`88api-image-gen@88api-plugins`（Claude Code、Codex、ZCode 相同）；DeepSeek Harness 插件包名 `88api-image-gen`
 - 开发说明：[docs/项目说明.md](docs/项目说明.md)
-- 更新说明：[v3.1.2](docs/更新说明-v3.1.2.md)；[v3.1.1](docs/更新说明-v3.1.1.md)；[v3.1.0](docs/更新说明-v3.1.0.md)；[v3.0.4](docs/更新说明-v3.0.4.md)；[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[v3.1.3](docs/更新说明-v3.1.3.md)；[v3.1.2](docs/更新说明-v3.1.2.md)；[v3.1.1](docs/更新说明-v3.1.1.md)；[v3.1.0](docs/更新说明-v3.1.0.md)；[v3.0.4](docs/更新说明-v3.0.4.md)；[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
