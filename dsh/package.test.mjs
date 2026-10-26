@@ -37,6 +37,10 @@ test('every client shows the same title, description and icon', () => {
   const icon = readFileSync(`${root}/${pkg.icon}`)
   assert.ok(icon.length <= 256 * 1024, 'DSH rejects icons over 256 KiB')
   assert.ok(icon.equals(readFileSync(`${root}/plugins/88api-image-gen/${codex.interface.logo}`)))
+  // ZCode only shows an https icon from the marketplace entry.
+  const entry = json('.claude-plugin/marketplace.json').plugins[0]
+  assert.equal(entry.displayName, codex.interface.displayName)
+  assert.equal(entry.icon, `https://raw.githubusercontent.com/blackdm666/88API-image-gen/main/${pkg.icon}`)
 })
 
 test('the DSH bundle points at the entry and the shared skill', () => {
