@@ -1,7 +1,8 @@
 {
   "name": "88api-image-gen",
-  "version": "3.1.0",
-  "description": "88API-Image-Gen for DeepSeek Harness: every 88API image model (GPT Image, Nano Banana, Grok, Seedream, Midjourney) as one skill. Claude Code, Codex and ZCode install it from the same repo through their plugin marketplaces.",
+  "version": "3.1.1",
+  "description": "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！",
+  "icon": "plugins/88api-image-gen/assets/plugin-logo.png",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -26,11 +27,14 @@
   "main": "./dsh/index.js",
   "exports": {
     ".": "./dsh/index.js",
+    "./locale/*": "./locale/*",
     "./package.json": "./package.json"
   },
   "files": [
     "dsh/",
+    "locale/",
     "plugins/88api-image-gen/skills/",
+    "plugins/88api-image-gen/assets/plugin-logo.png",
     "README.md",
     "VERSION.txt"
   ],

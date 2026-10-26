@@ -1,4 +1,4 @@
 interface:
   display_name: "88API-Image-Gen"
-  short_description: "88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney"
+  short_description: "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！"
   default_prompt: "使用 $88api-image-gen 生成或编辑图片；先自动检查 88API Key，未配置时主动向我索取并一键保存和脱敏验证，不要让我运行 PowerShell。"
