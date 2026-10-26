@@ -172,7 +172,7 @@ Codex 的 Auto 模式可能在插件脚本访问网络前发起外网执行审�
 
 ## 项目信息
 
-- 版本：`3.0.0`
+- 版本：`3.0.1`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件：`88api-image-gen@88api-plugins`（Codex、Claude Code、ZCode 同名）
-- 更新说明：[docs/更新说明-v3.0.0.md](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[docs/更新说明-v3.0.1.md](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)

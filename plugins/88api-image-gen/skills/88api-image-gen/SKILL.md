@@ -22,10 +22,10 @@ Resolve `<SKILL_DIR>` to an absolute path from where this file was loaded. Do no
 Run `node "<SKILL_DIR>/scripts/generate.mjs" --list-models` when you need to know what is available. It is free. It prints every catalog model with `available` (whether the saved Key's group lists it), its summary, resolutions, ratios, reference-image limit, quality / background / output-format values and billing, plus `undocumented` image models the Key lists but the catalog does not describe yet.
 
 1. If the user names a model, pass its exact ID with `--model`. Do not substitute another model. If it is not available for their Key, still let the request go: 88API answers with a clear message listing the groups that offer it, and that answer is not billed.
-2. If the user names a family without an ID, map it: GPT Image / Image2 → `gpt-image-2`; Image 2.5 → `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst` (quality); Nano Banana / Gemini → `gemini-3.1-flash-image`; Nano Banana 2.1 → `gemini-nano-banana-2.1`; Nano Banana Pro → `gemini-3-pro-image`; Grok → `grok-imagine-image`; Seedream → `doubao-seedream-5-0-pro`; Midjourney → `midjourney-v8.2`.
+2. If the user names a family without an ID, map it: GPT Image / Image2 → `gpt-image-2`; Image 2.5 → `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst` (quality); Nano Banana / Gemini → `gemini-3.1-flash-image`; Nano Banana 2.1 → `gemini-nano-banana-2.1`; Nano Banana Pro → `gemini-3-pro-image`; Grok → `grok-imagine-image` (for both generation and editing); Seedream → `doubao-seedream-5-0-pro`; Midjourney → `midjourney-v8.2`.
 3. Otherwise omit `--model`; the CLI uses the saved default, then the factory default `gpt-image-2`.
-4. Before using a clearly more expensive or slower model the user did not ask for (for example `gemini-3-pro-image` instead of Flash, an `az-gpt-image-*` model at `high`/`max` quality, or Midjourney, which bills per 4-image request), ask first.
-5. Pick by need, using the catalog summaries: transparent background → an `az-gpt-image-*` model; exact pixel sizes and up to 4K → `gpt-image-*` / `az-gpt-image-*`; Gemini models for strong text and identity edits; Grok for fast drafts (1K/2K only).
+4. The catalog lists each model's billing unit (per image, per request or per token), not its price. Ask first before using one of these more expensive or slower choices the user did not ask for: `gemini-3-pro-image` instead of Flash; an `az-gpt-image-*` model at `high`, `xhigh` or `max` quality or at 2K/4K (billed per token, so cost rises with size and quality); Midjourney (one request is 4 images, billed per request). Do not quote prices from memory; point the user to https://88api.ai/pricing for current prices.
+5. Pick by need, using the catalog summaries: transparent background → an `az-gpt-image-*` model; exact pixel sizes and up to 4K → `gpt-image-*` / `az-gpt-image-*`; Gemini models for strong text and identity edits; Grok for fast drafts (1K/2K only). Within Grok: `grok-imagine-image` is the default; use `grok-imagine-image-quality` when the user asks for higher quality or more realistic detail, and `grok-imagine-image-2.0` for the most careful layout and typography (slowest). `grok-imagine-edit` is the same model as `grok-imagine-image-quality`; there is no need to pick it for edits.
 6. Do not run `--set-model` unless the user explicitly wants to change the long-term default. Never switch models after an accepted or unknown-state request.
 
 ## Parameters
@@ -33,7 +33,7 @@ Run `node "<SKILL_DIR>/scripts/generate.mjs" --list-models` when you need to kno
 Pass only what the user asked for; every flag is checked against the chosen model's catalog entry before any paid request, and an unsupported value stops with an error that names the supported ones.
 
 - `--aspect R` (alias `--ratio`): e.g. `1:1`, `16:9`, `9:16`. The allowed list differs per model (Grok has 15 incl. `auto`, Gemini has 10, Seedream has none).
-- `--resolution 1K|2K|4K`: converted to the model's own size field — exact pixels for GPT Image, `aspect_ratio` + `resolution` for Grok, `image_config.image_size` for Gemini, a size tier for Seedream. Not every model has 4K (Grok tops out at 2K).
+- `--resolution 1K|2K|4K`: converted to the model's own size field — exact pixels for GPT Image, `aspect_ratio` + `resolution` for Grok, `image_config.image_size` for Gemini, a size tier for Seedream. Not every model has 4K (Grok tops out at 2K). Without `--resolution` the CLI uses the resolution saved with `--set-quick-mode` / `--set-batch-mode`, else the model's catalog default, which is 1K for every current model that has a resolution setting (Midjourney has none). The same tier and ratio give different pixels on different models (1K 16:9 is 1280×720 on GPT Image and Grok, 1376×768 on Gemini); `--dry-run` or `--resolve-size` prints the exact pixels before a paid run.
 - `--quality Q`: the model's quality levels (e.g. `low|medium|high`, `xhigh|max` on `az-gpt-image-2.5-*`, `low|medium|auto` on `grok-imagine-image-2.0`). For older commands `--quality 2K/4K` is read as `--resolution`.
 - `--background transparent|opaque|auto` and `--output-format png|webp|jpeg`: only where the catalog lists them (the `az-gpt-image-*` models). Transparency needs png or webp.
 - Masks, custom pixel sizes outside the catalog presets, and parameters the catalog does not list are not available. Explain the limitation instead of inventing options.
@@ -76,13 +76,15 @@ node "<SKILL_DIR>/scripts/generate.mjs" --model az-gpt-image-2 --prompt "<sticke
 
 Only add `--preview` when the user explicitly asks for a real intermediate preview. It works for one text-to-image task on exact-pixel GPT Image models, uses SSE partial-image output, and may increase usage or cost; other models ignore it with a notice.
 
+Images are saved to `~/Pictures/88api-image-gen` unless `--output-dir "<absolute directory>"` is given; every saved path is printed. Each paid run also prints a `Route:` line with the protocol and endpoint it actually calls (Images API or Chat Completions).
+
 A Midjourney request returns 4 images; all four are saved and listed.
 
 ## Edit and multi-reference edit
 
 ```powershell
 node "<SKILL_DIR>/scripts/generate.mjs" --edit --image "<reference.png>" --prompt "<edit instruction>" --aspect 16:9
-node "<SKILL_DIR>/scripts/generate.mjs" --edit --model grok-imagine-image-quality --image "<person.png>" --image "https://example.com/scene.jpg" --prompt "<composition instruction>"
+node "<SKILL_DIR>/scripts/generate.mjs" --edit --model grok-imagine-image --image "<person.png>" --image "https://example.com/scene.jpg" --prompt "<composition instruction>"
 ```
 
 `--image` takes local files or public `http(s)` URLs. All references go to one edit request in order; the prompt can refer to them as first, second, and so on. The CLI picks the edit request the catalog documents for that model (multipart upload, JSON with data URIs/URLs, or Chat Completions image parts) and enforces its reference limit before sending (for example 4 for `gpt-image-2`, 3 for Grok, 6 for `gemini-nano-banana-2.1`; Seedream takes 1 local file or up to 14 URLs; Midjourney cannot edit). Do not pre-compose references unless the user asks.
@@ -182,6 +184,6 @@ Requests time out after 10 minutes, so slow channels that take several minutes a
 After generation or editing:
 
 1. Report the actual model and the resolved size (resolution, ratio and pixels when known).
-2. Report the saved absolute path(s), final dimensions, request slot, and elapsed time. Midjourney results list all 4 files.
+2. Report the saved absolute path(s), final dimensions and elapsed time. Midjourney results list all 4 files.
 3. Display each successful image when the client supports local image rendering.
 4. Report partial failures and `[NO-AUTO-RETRY]` states clearly; do not conceal them or silently generate replacements. If the user explicitly requests another attempt, submit exactly one new request.

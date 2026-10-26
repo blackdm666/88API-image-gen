@@ -21,7 +21,7 @@ const API_ROOT = "https://88api.ai";
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
 const MODELS_URL = `${API_ROOT}/v1/models`;
-const PLUGIN_VERSION = "3.0.0";
+const PLUGIN_VERSION = "3.0.1";
 const DEFAULT_MODEL = "gpt-image-2";
 // Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
 const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
@@ -369,6 +369,23 @@ function resolveRunTransport(value) {
     throw new Error(`Invalid transport="${value}". Use auto or images.`);
   }
   return "images";
+}
+
+// What the run actually calls, for the progress line. The --transport flag only
+// exists for compatibility; the endpoint comes from the model catalog.
+function routeLabel(model, imagePaths = null) {
+  const entry = modelEntry(model);
+  if (entry.protocol === "gemini-chat") return `Chat Completions ${CHAT_COMPLETIONS_URL}`;
+  if (imagePaths?.length) {
+    try {
+      const variant = editVariantFor(model, imagePaths.map((path) => ({ url: /^https?:\/\//i.test(String(path)) ? path : null })));
+      return `Images API ${API_ROOT}${variant.endpoint} (${variant.upload})`;
+    } catch (error) {
+      // Workflow modes validate references per request; the label just says why.
+      return `Images API (${error?.message || error})`;
+    }
+  }
+  return `Images API ${API_ROOT}${entry.generate.endpoint}`;
 }
 
 function modelEntry(model) {
@@ -2331,11 +2348,15 @@ async function runBatch(workers, prompts, size, concurrency, outputDir, options 
     onTaskStart: (task, context) => {
       console.log(`[${context.index + 1}/${context.total}] ${task.startText} via ${workerLabel(context.worker)}`);
     },
-    runTask: async (worker, task) => generateImage(worker.apiKey, task.prompt, size, outputDir, {
-      model,
-      resize,
-      transport,
-      preview: preview && prompts.length === 1,
+    // The summary below prints each result's prompt, so carry it on the result.
+    runTask: async (worker, task) => ({
+      ...await generateImage(worker.apiKey, task.prompt, size, outputDir, {
+        model,
+        resize,
+        transport,
+        preview: preview && prompts.length === 1,
+      }),
+      prompt: task.prompt,
     }),
   });
 
@@ -4479,7 +4500,7 @@ async function main() {
     const concurrency = clampInteger(flags.concurrency ?? MAX_CONCURRENCY, 1, MAX_CONCURRENCY, Math.min(MAX_CONCURRENCY, DEFAULTS.concurrency));
     const repairPasses = clampInteger(flags.repairPasses, 0, 5, WORKFLOW_DEFAULT_REPAIR_PASSES);
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (workflow batch); model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model, [...(flags.fixedRefs || []), "item.png"])} (workflow batch); model: ${model} (${size})`);
     const result = await runWorkflowBatchEdit(configuredWorkers, {
       fixedRefPaths: flags.fixedRefs || [],
       itemDir: flags.itemDir,
@@ -4522,7 +4543,7 @@ async function main() {
     const nailParams = resolveGenerationParams({ ...flags, aspect: "9:16" }, { ratio: "9:16" }, config);
     const { model, size } = nailParams;
     const transport = resolveRunTransport(requestedTransport, true);
-    console.log(`Transport: ${transport} (batch preset); model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model, [flags.personaPath, "product.png"])} (batch preset); model: ${model} (${size})`);
     const result = await runNailStressTest(configuredWorkers, {
       personaPath: flags.personaPath,
       productDir: flags.productDir,
@@ -4573,7 +4594,7 @@ async function main() {
         printDryRunPlan({ mode: "batch-edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images.slice(0, 1), count: images.length, concurrency });
         return;
       }
-      console.log(`Transport: ${transport} (batch edit); model: ${model} (${size})`);
+      console.log(`Route: ${routeLabel(model, images.slice(0, 1))} (batch edit); model: ${model} (${size})`);
       process.exitCode = await runBatchEdit(configuredWorkers, images, prompts[0], size, concurrency, outputDir, {
         model,
         adaptive: flags.adaptive !== false,
@@ -4591,7 +4612,7 @@ async function main() {
       printDryRunPlan({ mode: images.length > 1 ? "multi-reference-edit" : "edit", model, size, aspect: ratio, prompts: [prompts[0]], imagePaths: images, count, concurrency, preview });
       return;
     }
-    console.log(`Transport: ${transport}; model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model, images)}; model: ${model} (${size})`);
     const result = await editImage(configuredWorkers, images, prompts[0], size, outputDir, count, false, {
       adaptive: flags.adaptive !== false,
       concurrency,
@@ -4651,7 +4672,7 @@ async function main() {
       printDryRunPlan({ mode: "batch", model, size, aspect: ratio, prompts: batchPrompts.map(String), count: batchPrompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model)} (batch prompts); model: ${model} (${size})`);
     // Let the event loop drain: process.exit() right after fetch aborts on Windows
     // (libuv UV_HANDLE_CLOSING assertion, exit code 127) and hides the real result.
     process.exitCode = await runBatch(configuredWorkers, batchPrompts.map(String), size, concurrency, outputDir, {
@@ -4674,7 +4695,7 @@ async function main() {
       printDryRunPlan({ mode: "batch-inline", model, size, aspect: ratio, prompts, count: prompts.length, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (batch prompts); model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model)} (batch prompts); model: ${model} (${size})`);
     process.exitCode = await runBatch(configuredWorkers, prompts, size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
@@ -4695,7 +4716,7 @@ async function main() {
       printDryRunPlan({ mode: "repeat", model, size, aspect: ratio, prompts: Array(total).fill(prompt), count: total, concurrency });
       return;
     }
-    console.log(`Transport: ${transport} (${total} independent images); model: ${model} (${size})`);
+    console.log(`Route: ${routeLabel(model)} (${total} independent images); model: ${model} (${size})`);
     process.exitCode = await runBatch(configuredWorkers, Array(total).fill(prompt), size, concurrency, outputDir, {
       model,
       adaptive: flags.adaptive !== false,
@@ -4715,7 +4736,7 @@ async function main() {
     printDryRunPlan({ mode: "generation", model, size, aspect: ratio, prompts: [prompt], count: 1, concurrency: 1, preview });
     return;
   }
-  console.log(`Transport: ${transport}${preview ? " (Image API partial-image preview enabled)" : ""}; model: ${model} (${size})`);
+  console.log(`Route: ${routeLabel(model)}${preview ? " (partial-image preview enabled)" : ""}; model: ${model} (${size})`);
   process.exitCode = await runBatch(configuredWorkers, [prompt], size, 1, outputDir, {
     model,
     adaptive: flags.adaptive !== false,
