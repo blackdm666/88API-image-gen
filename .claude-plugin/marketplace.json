@@ -9,7 +9,7 @@
     {
       "name": "88api-image-gen",
       "source": "./plugins/88api-image-gen",
-      "description": "通过 88API 生成和编辑图片：GPT Image、Nano Banana、Grok、Seedream、Midjourney，一个插件全覆盖。",
+      "description": "一个插件调用 88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney。",
       "category": "productivity"
     }
   ]

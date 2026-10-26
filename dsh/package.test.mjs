@@ -17,6 +17,28 @@ test('package version matches the plugin version', () => {
   assert.match(read('plugins/88api-image-gen/skills/88api-image-gen/scripts/generate.mjs'), new RegExp(`PLUGIN_VERSION = "${pkg.version.replace(/\./g, '\\.')}"`))
 })
 
+test('every client shows the same title, description and icon', () => {
+  const json = (path) => JSON.parse(read(path))
+  const codex = json('plugins/88api-image-gen/.codex-plugin/plugin.json')
+  const locale = json('locale/en.json').meta
+  const descriptions = [
+    pkg.description,
+    locale.description,
+    json('plugins/88api-image-gen/.claude-plugin/plugin.json').description,
+    json('.claude-plugin/marketplace.json').plugins[0].description,
+    codex.description,
+    codex.interface.shortDescription,
+    read('plugins/88api-image-gen/skills/88api-image-gen/agents/openai.yaml').match(/short_description: "(.*)"/)[1],
+  ]
+  assert.deepEqual(new Set(descriptions), new Set([pkg.description]))
+  assert.equal(locale.title, codex.interface.displayName)
+  assert.ok(pkg.files.includes('locale/') && pkg.files.includes(pkg.icon))
+  assert.ok(pkg.exports['./locale/*'])
+  const icon = readFileSync(`${root}/${pkg.icon}`)
+  assert.ok(icon.length <= 256 * 1024, 'DSH rejects icons over 256 KiB')
+  assert.ok(icon.equals(readFileSync(`${root}/plugins/88api-image-gen/${codex.interface.logo}`)))
+})
+
 test('the DSH bundle points at the entry and the shared skill', () => {
   assert.equal(pkg.main, './dsh/index.js')
   assert.ok(existsSync(`${root}/${pkg.dsh.bundle.patch}`))
