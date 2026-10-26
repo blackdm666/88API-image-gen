@@ -86,7 +86,7 @@ Codex 里在输入框输入 `@` 选择 **88API-Image-Gen** 再描述；Claude Co
 | `--quality` | 质量档位，例如 `low\|medium\|high`；`az-gpt-image-2.5-*` 另有 `xhigh\|max`，`grok-imagine-image-2.0` 是 `low\|medium\|auto` |
 | `--background transparent` | 透明背景，仅 `az-gpt-image-*`，需配合 `--output-format png` 或 `webp` |
 | `--image <路径或链接>` | 参考图，可以重复多次；上限因模型而异，例如 `gpt-image-2` 4 张、Grok 3 张、`gemini-nano-banana-2.1` 6 张 |
-| `--output-dir <目录>` | 保存位置，默认 `~/Pictures/88api-image-gen` |
+| `--output-dir <目录>` | 保存位置，默认 `~/Pictures/88api-image-gen`；在只能写工作目录的沙箱客户端里自动改存到工作目录下的 `88api-images` |
 | `--dry-run` | 只打印将要发出的请求，不花钱 |
 
 <details>
@@ -145,6 +145,8 @@ Full access 会取消当前任务的本地沙箱和审批限制，请自行决�
 - **技能没生效 / Codex 的 `@` 菜单里没有插件**：更新或重新安装插件，然后新开对话 / 新建任务。
 - **怎么确认装的是哪个版本**：让 Agent 运行 `--version`，或 `--get-config`，看「插件版本」一项。
 - **点名的模型用不了**：说明你的 Key 所在分组不提供这个模型。请求照样会发出，88API 会提示哪些分组可以用，这类拒绝不扣费。
+- **改图后画面被裁成了方形**：v3.0.3 起，不指定比例时会跟随第一张参考图的比例；想要别的比例就直接说「改成 16:9」。
+- **在 DeepSeek Harness 等沙箱客户端里提示目录不可写**：v3.0.3 起会自动把图和提交记录存到当前工作目录下（`88api-images`、`.88api-image-gen-jobs`），并打印实际位置。
 - **88API 新上了模型，插件不认识**：插件每天自动更新一次模型清单，也可以让 Agent 运行 `--refresh-models` 立即更新。
 - **`request was not sent`**：连不上 88API，请求没发出、没扣费，插件会自动重试。
 - **`stage: read-result`**：图已生成并扣费，只是读取结果时连接断了。
@@ -180,8 +182,8 @@ node generate.mjs --job-status
 
 ## 项目信息
 
-- 版本：`3.0.2`
+- 版本：`3.0.3`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件名：`88api-image-gen@88api-plugins`（Claude Code、Codex、ZCode 相同）
 - 开发说明：[docs/项目说明.md](docs/项目说明.md)
-- 更新说明：[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)

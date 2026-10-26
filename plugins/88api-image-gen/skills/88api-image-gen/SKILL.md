@@ -58,6 +58,8 @@ Treat the Key as sensitive. Never repeat it in replies, progress updates, or com
 
 The Key is saved to `~/.88api/image-gen.json`, shared by every Agent client on the machine. A Key saved by an older version (`~/.codex/88api-image-gen-config.json`) or by the discontinued 88API-Nano-Banana plugin (`~/.88api/nano-banana.json`) is copied there automatically on first use. `API88_KEY`, when set, takes precedence and is never written to disk; `--get-config` shows which source is active.
 
+**Check the Key only with `--get-config`**, which shows a masked preview and where the Key comes from. Never open, read, print, parse or copy `~/.88api/image-gen.json`, the legacy config files above, or any other file that may hold the Key, and never put the Key into a command line or an environment variable yourself (for example to work around a sandbox). If `--get-config` says no Key is configured, or a paid run reports that the Key cannot be read, stop and ask the user as described above.
+
 ## Prompt handling
 
 Translate the request into one clear image instruction while preserving all explicit constraints: subject identity, products, text content, composition, lighting, style, aspect ratio, and elements that must not change.
@@ -89,6 +91,8 @@ node "<SKILL_DIR>/scripts/generate.mjs" --edit --model grok-imagine-image --imag
 ```
 
 `--image` takes local files or public `http(s)` URLs. All references go to one edit request in order; the prompt can refer to them as first, second, and so on. The CLI picks the edit request the catalog documents for that model (multipart upload, JSON with data URIs/URLs, or Chat Completions image parts) and enforces its reference limit before sending (for example 4 for `gpt-image-2`, 3 for Grok, 6 for `gemini-nano-banana-2.1`; Seedream takes 1 local file or up to 14 URLs; Midjourney cannot edit). Do not pre-compose references unless the user asks.
+
+Without `--aspect`, an edit keeps the shape of the first reference: GPT Image models use the supported ratio closest to the first local reference (the CLI prints a NOTICE), and Gemini and Grok follow the reference upstream. Pass `--aspect` only when the user asks for a different shape.
 
 ## Multi-image and batch modes
 
@@ -128,6 +132,7 @@ One paid request can legitimately take up to 10 minutes (high quality, 4K and Ge
 
 - **Claude Code:** the Bash tool stops commands after 2 minutes by default and 10 minutes at most. Run every paid `generate.mjs` command with `run_in_background: true` and wait for its completion notification before reporting. Never run a paid command in the foreground with the default timeout. No-charge commands (`--version`, `--get-config`, `--list-models`, `--dry-run`, `--self-test`, `--job-status`) may run in the foreground.
 - **DeepSeek Harness:** its bash tool moves a command to the background after its timeout (120 seconds by default) instead of killing it. Wait for that background task to finish; do not start the same request again.
+- **Sandboxed clients (DeepSeek Harness, Codex workspace-write and similar):** when the default folders under the home directory are not writable, the CLI automatically saves images to `./88api-images` and job records to `./.88api-image-gen-jobs` under the current working directory and prints a NOTICE with the path; `--job-status` looks in both places. Report the printed path. Do not work around the sandbox with `API88_CONFIG_DIR`, `API88_KEY`, an extra `--output-dir`, or a full-access escalation; if the CLI still cannot write or read what it needs, stop and tell the user what failed.
 - **ZCode, Cursor, Cline, Windsurf, VS Code, Gemini CLI, and other clients:** if the client offers background or long-running commands, use them for paid commands. Otherwise run the paid command once and wait.
 - **Any client:** each paid run prints `Job record: <path>` and a job id first. If the command was cut off, timed out, lost its output, or its result is unclear, do not resubmit. Run `node "<SKILL_DIR>/scripts/generate.mjs" --job-status <job id>` (or `--job-status` alone for recent runs). It sends no request and costs nothing, and reports each request as saved, not sent, rejected by 88API, running, or `[NO-AUTO-RETRY]` unknown / interrupted (may be billed). Report the saved images it lists and follow the retry rules below for the rest.
 - `--json` prints one machine-readable summary line at the end of a paid run (the same shape as `--job-status`). Use it when the client makes long text output hard to read.
