@@ -1,7 +1,7 @@
 {
   "name": "88api-image-gen",
-  "version": "2.3.0",
-  "description": "来自 88api.ai Token 聚合站的生图插件（Codex 版），支持 Image2、Image2 4K、Image 2.5 Flare/Sunburst、SSE 与批量工作流。",
+  "version": "3.0.0",
+  "description": "来自 88api.ai Token 聚合站的生图插件（Codex 版）：一个插件调用 88API 全部生图模型——GPT Image、Gemini（Nano Banana）、Grok、Seedream、Midjourney，按 88API 文档站的模型清单自动选择端点和参数。",
   "author": {
     "name": "88api.ai"
   },
@@ -10,16 +10,18 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "88API-Image-Gen",
-    "shortDescription": "支持 Image 2.5 Flare/Sunburst、Image2 2K/4K、批量出图与图生图。",
-    "longDescription": "通过 88API 生成和编辑图片。默认使用 Image-2 2K，可选 Image 2.5 Flare/Sunburst（2K 预设）或 Image-2 4K；支持文生图、图生图、多参考图、批量出图与工作流任务。",
+    "shortDescription": "一个插件调用 88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney。",
+    "longDescription": "通过 88API 生成和编辑图片。插件读取 88API 文档站发布的模型清单，自动决定每个模型走 Images API 还是 Chat Completions、怎么传尺寸和参考图，并在付费前校验比例、1K/2K/4K 分辨率、质量档位和参考图张数；支持文生图、图生图、多参考图、透明背景、批量出图与工作流任务。替代已停止更新的 88API-Nano-Banana。",
     "developerName": "88api.ai",
     "category": "Productivity",
-    "capabilities": ["Write"],
+    "capabilities": [
+      "Write"
+    ],
     "brandColor": "#18A9B0",
     "composerIcon": "./assets/composer-icon.png",
     "logo": "./assets/plugin-logo.png",
     "logoDark": "./assets/plugin-logo-dark.png",
     "websiteURL": "https://88api.ai/",
-    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片。开始前自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。普通任务使用默认 Image2；明确点名 Image 2.5 Flare/Sunburst 时使用对应模型的 2K 预设，未点名模型而明确要求 4K 时使用 Image2 4K。"
+    "defaultPrompt": "使用 $88api-image-gen 生成或编辑图片。开始前自动检查 88API Key；若未配置，主动让我提供 Key，并由你一键保存和脱敏验证，不要让我运行 PowerShell。没指定模型时用默认 gpt-image-2；我点名模型或模型系列（如 Nano Banana、Grok、Seedream、Midjourney）时用对应模型，需要时先运行 --list-models 查看可用模型和参数范围。"
   }
 }

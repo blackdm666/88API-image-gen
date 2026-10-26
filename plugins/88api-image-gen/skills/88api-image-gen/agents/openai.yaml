@@ -1,4 +1,4 @@
 interface:
   display_name: "88API-Image-Gen"
-  short_description: "Image 2.5 Flare/Sunburst、Image2 2K/4K 生图与编辑"
+  short_description: "88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney"
   default_prompt: "使用 $88api-image-gen 生成或编辑图片；先自动检查 88API Key，未配置时主动向我索取并一键保存和脱敏验证，不要让我运行 PowerShell。"
