@@ -10,7 +10,7 @@
 
 支持 **Claude Code、Codex、ZCode、DeepSeek Harness**，以及 Cursor、Cline、Windsurf、Gemini CLI 等能读 `SKILL.md` 技能、能运行本机 Node.js 18+ 的客户端。
 
-> 原 **88API-Nano-Banana** 插件已停止更新，Gemini 生图并入本插件；装好本插件后 Nano 的 Key 会自动迁移。
+> 原 **88API-Nano-Banana** 插件已停止更新，Gemini 生图并入本插件；装好本插件后 Nano 的 Key 会自动迁移。DeepSeek Harness 原生插件 **dsh-plugin-88api-image** 也已停止更新，装过的请先在插件设置里卸载，再安装本插件。
 
 ## 快速开始
 
@@ -21,6 +21,7 @@
 | Claude Code | 在对话里输入 `/plugin marketplace add blackdm666/88API-image-gen`，再输入 `/plugin install 88api-image-gen@88api-plugins` |
 | Codex | 终端运行 `codex plugin marketplace add blackdm666/88API-image-gen`，然后在插件列表里安装 **88API-Image-Gen** |
 | ZCode | **设置 → Plugins → Create → Add marketplace**，填入 `blackdm666/88API-image-gen`，然后安装 **88api-image-gen** |
+| DeepSeek Harness | 打开「添加插件」，填入 `github:blackdm666/88API-image-gen`，点「安装」，然后新开对话 |
 | 其它客户端 | 把 [`plugins/88api-image-gen/skills/88api-image-gen/`](plugins/88api-image-gen/skills/88api-image-gen/) 整个文件夹复制到客户端的技能目录（见下方） |
 
 <details>
@@ -28,12 +29,12 @@
 
 | 客户端 | 用户级技能目录 |
 | --- | --- |
-| DeepSeek Harness | `~/.dsh/skills/` 或 `~/.agents/skills/` |
+| DeepSeek Harness（不用插件时） | `~/.dsh/skills/` 或 `~/.agents/skills/` |
 | Cursor、Gemini CLI 等认公共目录的客户端 | `~/.agents/skills/` |
 | Cline | `~/.cline/skills/` |
 | ZCode（不用插件时） | `~/.zcode/skills/` |
 
-复制后保持文件夹名为 `88api-image-gen`，新开对话让客户端重新加载技能。DeepSeek Harness 也可以继续使用原生插件 [dsh-plugin-88api-image](https://github.com/blackdm666/dsh-plugin-88api-image)。
+复制后保持文件夹名为 `88api-image-gen`，新开对话让客户端重新加载技能。DeepSeek Harness 两种方式选一种即可；两种都装了时，用插件装的那份。
 
 </details>
 
@@ -178,12 +179,13 @@ node generate.mjs --job-status
 - **Claude Code**：终端运行 `claude plugin marketplace update 88api-plugins` 和 `claude plugin update 88api-image-gen@88api-plugins`（也可以在对话里输入 `/plugin` 打开插件管理更新），然后新开对话。
 - **Codex**：`codex plugin marketplace upgrade 88api-plugins`，然后新建任务。
 - **ZCode**：在插件设置里更新 **88api-image-gen**。
+- **DeepSeek Harness**：暂不支持插件自动更新。在插件设置里卸载 **88api-image-gen**，再按安装步骤重新添加，然后新开对话。
 - **其它客户端**：用新版技能文件夹覆盖旧的。
 
 ## 项目信息
 
-- 版本：`3.0.4`
+- 版本：`3.1.0`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
-- 插件名：`88api-image-gen@88api-plugins`（Claude Code、Codex、ZCode 相同）
+- 插件名：`88api-image-gen@88api-plugins`（Claude Code、Codex、ZCode 相同）；DeepSeek Harness 插件包名 `88api-image-gen`
 - 开发说明：[docs/项目说明.md](docs/项目说明.md)
-- 更新说明：[v3.0.4](docs/更新说明-v3.0.4.md)；[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[v3.1.0](docs/更新说明-v3.1.0.md)；[v3.0.4](docs/更新说明-v3.0.4.md)；[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
