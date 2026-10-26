@@ -21,7 +21,7 @@ const API_ROOT = "https://88api.ai";
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
 const MODELS_URL = `${API_ROOT}/v1/models`;
-const PLUGIN_VERSION = "3.0.1";
+const PLUGIN_VERSION = "3.0.2";
 const DEFAULT_MODEL = "gpt-image-2";
 // Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
 const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
@@ -324,6 +324,7 @@ function buildConfigSummary(config, { envKey = ENV_API_KEY, source = loadedConfi
   const legacyExtraCount = Math.max(0, workers.length - (primaryWorker ? 1 : 0));
   const mirrors = legacyMirrorPaths(CONFIG_PATH);
   return {
+    插件版本: PLUGIN_VERSION,
     配置文件: CONFIG_PATH,
     Key来源: envKey ? "环境变量 API88_KEY（优先于配置文件，不写入磁盘）" : (primaryWorker ? source || CONFIG_PATH : "未配置"),
     旧版配置同步: mirrors.length > 0 ? `${mirrors.join(", ")}（保存时同步更新，供旧版插件使用）` : "无",
@@ -4021,6 +4022,7 @@ function parseArgs(argv) {
   while (i < argv.length) {
     const value = argv[i];
     if (value === "--get-config") args.flags.getConfig = true;
+    else if (value === "--version" || value === "-v") args.flags.version = true;
     else if (value === "--config-path") args.flags.configPath = true;
     else if (value === "--list-models") args.flags.listModels = true;
     else if (value === "--list-workers") args.flags.listWorkers = true;
@@ -4119,6 +4121,7 @@ function printUsage() {
   console.log(`88API-Image-Gen ${PLUGIN_VERSION}
 
 CONFIG
+  --version                     print the plugin version
   --get-config
   --config-path
   --list-models                 models in the 88API catalog, marked available/unavailable for the saved Key
@@ -4284,6 +4287,10 @@ async function main() {
   if (flags.unknownOption) {
     console.error(`ERROR: Unsupported option "${flags.unknownOption}". Run --help for the v${PLUGIN_VERSION} command list.`);
     process.exit(1);
+  }
+  if (flags.version) {
+    console.log(`88API-Image-Gen ${PLUGIN_VERSION}`);
+    return;
   }
   // Only runs that go online anyway refresh the catalog; offline commands
   // (dry-run, config, job status, self-test) use the cache or bundled snapshot.
