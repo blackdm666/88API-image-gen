@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "88API-Image-Gen",
-    "description": "一个插件调用 88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney。"
+    "description": "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！"
   }
 }

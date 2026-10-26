@@ -1,7 +1,7 @@
 {
   "name": "88api-image-gen",
   "version": "3.1.1",
-  "description": "一个插件调用 88API 全部生图模型：GPT Image、Nano Banana、Grok、Seedream、Midjourney。",
+  "description": "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！",
   "icon": "plugins/88api-image-gen/assets/plugin-logo.png",
   "keywords": [
     "deepseek-harness",
