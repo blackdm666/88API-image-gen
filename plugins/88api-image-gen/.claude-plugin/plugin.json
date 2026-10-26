@@ -3,6 +3,7 @@
   "displayName": "88API-Image-Gen",
   "version": "3.1.2",
   "description": "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！",
+  "icon": "./assets/plugin-logo.png",
   "author": {
     "name": "88api.ai",
     "url": "https://88api.ai/"
