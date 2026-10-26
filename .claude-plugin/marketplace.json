@@ -8,8 +8,15 @@
   "plugins": [
     {
       "name": "88api-image-gen",
+      "displayName": "88API-Image-Gen",
       "source": "./plugins/88api-image-gen",
       "description": "一个插件调用 88API 全部生图模型，支持 gpt-image、香蕉、Grok 等多种生图模型。适配 Claude、ZCode、DSH 等多种客户端！",
+      "icon": "https://raw.githubusercontent.com/blackdm666/88API-image-gen/main/plugins/88api-image-gen/assets/plugin-logo.png",
+      "homepage": "https://88api.ai/",
+      "author": {
+        "name": "88api.ai",
+        "url": "https://88api.ai/"
+      },
       "category": "productivity"
     }
   ]
