@@ -179,7 +179,7 @@ node generate.mjs --job-status
 - **Claude Code**：终端运行 `claude plugin marketplace update 88api-plugins` 和 `claude plugin update 88api-image-gen@88api-plugins`（也可以在对话里输入 `/plugin` 打开插件管理更新），然后新开对话。
 - **Codex**：`codex plugin marketplace upgrade 88api-plugins`，然后新建任务。
 - **ZCode**：在插件设置里更新 **88api-image-gen**。
-- **DeepSeek Harness**：暂不支持插件自动更新。在插件设置里卸载 **88api-image-gen**，再按安装步骤重新添加，然后新开对话。
+- **DeepSeek Harness**：暂不支持插件自动更新。在插件设置里卸载 **88API-Image-Gen**，再按安装步骤重新添加；重新添加后完全退出并重新打开 DSH（托盘里的也要退出），然后新开对话。
 - **其它客户端**：用新版技能文件夹覆盖旧的。
 
 ## 项目信息
