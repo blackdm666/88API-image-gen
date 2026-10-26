@@ -12,7 +12,7 @@
 
 > 原 **88API-Nano-Banana** 插件已停止更新，Gemini 生图并入本插件；装好本插件后 Nano 的 Key 会自动迁移。DeepSeek Harness 原生插件 **dsh-plugin-88api-image** 也已停止更新，装过的请先在插件设置里卸载，再安装本插件。
 
-> 🎬 **想做视频？** 试试姊妹插件 [88API-Video-Studio](https://github.com/blackdm666/seedance-studio)：一句话出短片或 TVC 广告片，还能反推参考视频的提示词。和本插件共用同一个 88API Key，见下方[视频生成插件](#视频生成插件88api-video-studio)。
+> 🎬 **想做视频？** 试试姊妹插件 [88API-Video-Studio](https://github.com/blackdm666/88API-Video-Studio)：一句话出短片或 TVC 广告片，还能反推参考视频的提示词。和本插件共用同一个 88API Key，见下方[视频生成插件](#视频生成插件88api-video-studio)。
 
 ## 快速开始
 
@@ -189,7 +189,7 @@ node generate.mjs --job-status
 
 ## 视频生成插件：88API-Video-Studio
 
-[88API-Video-Studio](https://github.com/blackdm666/seedance-studio) 是 88API 的视频生成插件，和本插件搭配使用：先用本插件做关键帧、人物或产品图，再交给它生成视频。
+[88API-Video-Studio](https://github.com/blackdm666/88API-Video-Studio) 是 88API 的视频生成插件，和本插件搭配使用：先用本插件做关键帧、人物或产品图，再交给它生成视频。
 
 | 用法 | 你说 | 它做 |
 | --- | --- | --- |
@@ -197,7 +197,7 @@ node generate.mjs --job-status
 | 视频 → 反推 | 「反推这个视频的提示词。」 | 抽帧逐帧分析运镜、动作、文字和声音，给出可以直接生成的提示词 |
 | 视频 → 复刻工程包 | 「把这个参考片做成可复刻工程包，我要换成自己的产品。」 | 在反推基础上整理素材清单和分段提示词，补齐素材即可一键生成 |
 
-- **安装**：目前是 Codex 插件，终端运行 `codex plugin marketplace add blackdm666/seedance-studio`，然后在插件列表里安装。
+- **安装**：目前是 Codex 插件，终端运行 `codex plugin marketplace add blackdm666/88API-Video-Studio`，然后在插件列表里安装。
 - **凭据**：会复用本插件已保存的 88API Key；查询余额和价格另需一个 88API 个人访问令牌，首次使用时 Agent 会引导配置。
 - **需要**：Node.js 18+；反推和拼接需要 ffmpeg。
 - 付费提交前会先估算金额并等你确认；专注单条短片与 TVC，不做多集短剧。
