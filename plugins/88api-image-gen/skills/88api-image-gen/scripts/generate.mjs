@@ -21,7 +21,7 @@ const API_ROOT = "https://88api.ai";
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
 const MODELS_URL = `${API_ROOT}/v1/models`;
-const PLUGIN_VERSION = "3.1.2";
+const PLUGIN_VERSION = "3.1.3";
 const DEFAULT_MODEL = "gpt-image-2";
 // Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
 const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
@@ -48,6 +48,10 @@ const LEGACY_FHL_CONFIG_PATH = join(homedir(), ".codex", "fhl-image-gen-config.j
 // migrated on first use. Its saved Gemini model carries over as the default.
 const LEGACY_NANO_CONFIG_PATHS = [join(CONFIG_DIR, "nano-banana.json"), join(homedir(), ".codex", "88api-nano-banana-config.json")];
 const LEGACY_CONFIG_PATHS = [LEGACY_CODEX_CONFIG_PATH, LEGACY_FHL_CONFIG_PATH, ...LEGACY_NANO_CONFIG_PATHS];
+// The API Key saved by the sister plugin 88API-Video-Studio (0.12.0+ beside this
+// config, earlier versions in ~/.seedance-studio). Used only while this plugin has
+// no Key of its own; it is read, never copied, so changing it there takes effect here.
+const VIDEO_STUDIO_CONFIG_PATHS = [join(CONFIG_DIR, "video-studio.json"), ...(CONFIG_DIR_OVERRIDDEN ? [] : [join(homedir(), ".seedance-studio", "config.json")])];
 const CATALOG_CACHE_PATH = join(CONFIG_DIR, "image-models.json");
 const JOB_LIST_LIMIT = 5;
 
@@ -310,9 +314,28 @@ function getPrimaryWorker(config, options = {}) {
   return workers.find((worker) => worker.enabled !== false) || workers[0] || null;
 }
 
+function readVideoStudioKey(paths = VIDEO_STUDIO_CONFIG_PATHS) {
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    try {
+      const apiKey = String(JSON.parse(readFileSync(path, "utf8"))?.apiKey || "").trim();
+      if (apiKey) return { apiKey, path };
+    } catch {
+      // An unreadable sister config is simply not a Key source.
+    }
+  }
+  return null;
+}
+
+function sharedVideoStudioWorker(config, paths = VIDEO_STUDIO_CONFIG_PATHS) {
+  if (getPrimaryWorker(config, { requireEnabled: true })) return null;
+  const shared = readVideoStudioKey(paths);
+  return shared ? { id: "video-studio", name: "88API-Video-Studio", apiKey: shared.apiKey, enabled: true, source: shared.path } : null;
+}
+
 function getEnabledWorkersOrExit(config) {
   if (ENV_API_KEY) return [{ id: "env", name: "API88_KEY", apiKey: ENV_API_KEY, enabled: true }];
-  const worker = getPrimaryWorker(config, { requireEnabled: true });
+  const worker = getPrimaryWorker(config, { requireEnabled: true }) || sharedVideoStudioWorker(config);
   if (!worker) {
     console.error("ERROR: No 88API Key is configured. Send the Key to the Agent so it can save and verify it for you (you do not need to run any command), or set the API88_KEY environment variable.");
     process.exit(1);
@@ -325,18 +348,21 @@ function workerLabel(worker) {
   return String(worker.name || "").trim() || String(worker.id || "").trim() || "unknown-worker";
 }
 
-function buildConfigSummary(config, { envKey = ENV_API_KEY, source = loadedConfigSource } = {}) {
+function buildConfigSummary(config, { envKey = ENV_API_KEY, source = loadedConfigSource, videoStudioPaths = VIDEO_STUDIO_CONFIG_PATHS } = {}) {
   const workers = getConfiguredWorkers(config);
   const primaryWorker = getPrimaryWorker(config);
+  const sharedWorker = envKey || primaryWorker ? null : sharedVideoStudioWorker(config, videoStudioPaths);
   const legacyExtraCount = Math.max(0, workers.length - (primaryWorker ? 1 : 0));
   const mirrors = legacyMirrorPaths(CONFIG_PATH);
   return {
     插件版本: PLUGIN_VERSION,
     配置文件: CONFIG_PATH,
-    Key来源: envKey ? "环境变量 API88_KEY（优先于配置文件，不写入磁盘）" : (primaryWorker ? source || CONFIG_PATH : "未配置"),
+    Key来源: envKey ? "环境变量 API88_KEY（优先于配置文件，不写入磁盘）"
+      : primaryWorker ? source || CONFIG_PATH
+        : sharedWorker ? `${sharedWorker.source}（88API-Video-Studio 保存的 Key；本插件没有自己的 Key 时复用，不复制）` : "未配置",
     旧版配置同步: mirrors.length > 0 ? `${mirrors.join(", ")}（保存时同步更新，供旧版插件使用）` : "无",
-    已配置Key: !!(envKey || primaryWorker),
-    Key预览: envKey ? previewKey(envKey) : (primaryWorker ? previewKey(primaryWorker.apiKey) : null),
+    已配置Key: !!(envKey || primaryWorker || sharedWorker),
+    Key预览: envKey ? previewKey(envKey) : (primaryWorker || sharedWorker ? previewKey((primaryWorker || sharedWorker).apiKey) : null),
     Key模式: "单 Key",
     上游分组: "请在 88API 控制台选择 auto；本地无法从 Key 反查分组",
     并发模式: "同一 Key 建立本地请求槽，由 auto 分组在上游自动分配",
@@ -3989,7 +4015,7 @@ async function runResultDownloadSelfTest() {
 // the job record: requests cut off by a killed process read back as
 // interrupted and never retryable, and nothing here touches the real home dir.
 async function runConfigJobSelfTest() {
-  console.log("Config/job self-test: legacy config migration, legacy mirror, job record states, interrupted runs.");
+  console.log("Config/job self-test: legacy config migration, legacy mirror, shared 88API-Video-Studio Key, job record states, interrupted runs.");
   const root = resolveOutputDir(join(tmpdir(), `88api-image-gen-config-job-test-${process.pid}-${Date.now()}`));
   const newPath = join(root, "new", "image-gen.json");
   const legacyPath = join(root, "legacy", "88api-image-gen-config.json");
@@ -4013,6 +4039,25 @@ async function runConfigJobSelfTest() {
     checks.envKeySummary = envSummary.Key预览 === previewKey("sk-test-environment-key")
       && envSummary.Key来源.includes("API88_KEY")
       && !JSON.stringify(envSummary).includes("sk-test-environment-key");
+
+    // 88API-Video-Studio's Key: the 0.12.0 location wins over the pre-0.12 one, and
+    // it is used only while this plugin has no Key, without being copied here.
+    const videoPaths = [join(root, "88api", "video-studio.json"), join(root, "seedance-studio", "config.json")];
+    mkdirSync(dirname(videoPaths[1]), { recursive: true });
+    writeFileSync(videoPaths[1], JSON.stringify({ apiKey: "sk-test-video-legacy", accessToken: "token" }), "utf8");
+    const noKeyConfig = normalizeConfigShape({}).config;
+    const fromLegacyVideo = sharedVideoStudioWorker(noKeyConfig, videoPaths);
+    mkdirSync(dirname(videoPaths[0]), { recursive: true });
+    writeFileSync(videoPaths[0], JSON.stringify({ apiKey: "sk-test-video-shared" }), "utf8");
+    const fromVideo = sharedVideoStudioWorker(noKeyConfig, videoPaths);
+    const videoSummary = buildConfigSummary(noKeyConfig, { envKey: "", source: null, videoStudioPaths: videoPaths });
+    checks.reusesVideoStudioKey = fromLegacyVideo?.apiKey === "sk-test-video-legacy" && fromLegacyVideo.source === videoPaths[1]
+      && fromVideo?.apiKey === "sk-test-video-shared" && fromVideo.source === videoPaths[0]
+      && sharedVideoStudioWorker(migrated, videoPaths) === null
+      && videoSummary.已配置Key === true && videoSummary.Key来源.includes("88API-Video-Studio")
+      && videoSummary.Key预览 === previewKey("sk-test-video-shared")
+      && !JSON.stringify(videoSummary).includes("sk-test-video-shared")
+      && !existsSync(join(root, "88api", "image-gen.json"));
 
     activeJobRecord = startJobRecord({ mode: "self-test", model: DEFAULT_MODEL }, jobsDir);
     const saved = jobRequestStart({ kind: "generation", model: DEFAULT_MODEL, size: "2048x2048", prompt: "a" });
@@ -4057,7 +4102,7 @@ async function runConfigJobSelfTest() {
   } finally {
     activeJobRecord = previousRecord;
   }
-  if (!Object.values(checks).every(Boolean) || Object.keys(checks).length !== 8) {
+  if (!Object.values(checks).every(Boolean) || Object.keys(checks).length !== 9) {
     console.error("Config/job self-test FAILED.");
     console.error(JSON.stringify(checks, null, 2));
     return 1;
@@ -4331,7 +4376,7 @@ async function fetchKeyModels(apiKey) {
 }
 
 function savedApiKey(config) {
-  return ENV_API_KEY || getPrimaryWorker(config, { requireEnabled: true })?.apiKey || "";
+  return ENV_API_KEY || getPrimaryWorker(config, { requireEnabled: true })?.apiKey || sharedVideoStudioWorker(config)?.apiKey || "";
 }
 
 // A model the catalog does not document can still be tried when the Key lists
