@@ -21,7 +21,7 @@ const API_ROOT = "https://88api.ai";
 const IMAGES_EDITS_URL = `${API_ROOT}/v1/images/edits`;
 const CHAT_COMPLETIONS_URL = `${API_ROOT}/v1/chat/completions`;
 const MODELS_URL = `${API_ROOT}/v1/models`;
-const PLUGIN_VERSION = "3.0.3";
+const PLUGIN_VERSION = "3.0.4";
 const DEFAULT_MODEL = "gpt-image-2";
 // Model ids from older plugin versions: gpt-image-2-4k became gpt-image-2 + 4K.
 const LEGACY_MODEL_ALIASES = { "gpt-image-2-4k": { model: "gpt-image-2", resolution: "4K" } };
@@ -4520,7 +4520,15 @@ async function main() {
 
   if (flags.setKey) {
     const singleKeyConfig = replaceWithSingleKey(config, flags.setKey);
-    saveConfig(singleKeyConfig);
+    try {
+      saveConfig(singleKeyConfig);
+    } catch (error) {
+      if (!isPermissionError(error)) throw error;
+      // Never fall back to the working directory for the Key: project files may be shared or committed.
+      console.error(`ERROR: The Key was not saved: ${CONFIG_PATH} is not writable here (${error.code}, usually a sandboxed client). Run this same --set-key command once with the client's approval to write outside the workspace, or set API88_KEY in the client's environment. The Key is never saved anywhere else.`);
+      process.exitCode = 1;
+      return;
+    }
     console.log(`88API Key saved: ${previewKey(flags.setKey)} (single-Key auto allocation)`);
     return;
   }
