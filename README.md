@@ -182,8 +182,8 @@ node generate.mjs --job-status
 
 ## 项目信息
 
-- 版本：`3.0.3`
+- 版本：`3.0.4`
 - GitHub：[blackdm666/88API-image-gen](https://github.com/blackdm666/88API-image-gen)
 - 插件名：`88api-image-gen@88api-plugins`（Claude Code、Codex、ZCode 相同）
 - 开发说明：[docs/项目说明.md](docs/项目说明.md)
-- 更新说明：[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)
+- 更新说明：[v3.0.4](docs/更新说明-v3.0.4.md)；[v3.0.3](docs/更新说明-v3.0.3.md)；[v3.0.2](docs/更新说明-v3.0.2.md)；[v3.0.1](docs/更新说明-v3.0.1.md)；[v3.0.0](docs/更新说明-v3.0.0.md)；[v2.3.0](docs/更新说明-v2.3.0.md)；[v2.2.0](docs/更新说明-v2.2.0.md)；[v2.1.0](docs/更新说明-v2.1.0.md)；[v2.0.0 破坏性变更](docs/更新说明-v2.0.0.md)

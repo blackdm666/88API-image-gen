@@ -1,6 +1,6 @@
 {
   "name": "88api-image-gen",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "来自 88api.ai Token 聚合站的生图插件（Codex 版）：一个插件调用 88API 全部生图模型——GPT Image、Gemini（Nano Banana）、Grok、Seedream、Midjourney，按 88API 文档站的模型清单自动选择端点和参数。",
   "author": {
     "name": "88api.ai"
